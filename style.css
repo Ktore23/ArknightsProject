@@ -1,0 +1,84 @@
+.game-body {
+    margin: 0;
+    padding: 0;
+    background-color: #000;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}
+
+#canvas {
+    display: block;
+    width: 100%;
+    height: 100vh;
+}
+
+.game-menu {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    padding: 20px;
+    border-radius: 10px;
+    color: #fff;
+    z-index: 10;
+}
+
+.menu-title {
+    margin: 0 0 15px 0;
+    font-size: 20px;
+    text-align: center;
+}
+
+.menu-item {
+    margin-bottom: 10px;
+}
+
+.menu-label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 14px;
+}
+
+.menu-select {
+    width: 100%;
+    padding: 5px;
+    background-color: #333;
+    color: #fff;
+    border: 1px solid #555;
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+.menu-button {
+    width: 100%;
+    padding: 5px;
+    background-color: #555;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.menu-button:hover {
+    background-color: #777;
+}
+
+.menu-checkbox {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+}
+
+.checkbox-input {
+    margin-right: 5px;
+}
+
+.error-message {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    color: red;
+    font-size: 14px;
+    z-index: 10;
+}

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Arknights Web</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="./spine-webgl.js"></script>
+  <script src="https://code.jquery.com/jquery-3.1.0.min.js"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+      }
+    }
+  </script>
+</head>
+<body class="game-body">
+  <canvas id="canvas"></canvas>
+  <canvas id="hitboxCanvas" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
+
+  <div id="gameMenu" class="game-menu">
+    <h2 class="menu-title">Game Settings</h2>
+    <div class="menu-item">
+      <label class="menu-label">Select Player Character:</label>
+      <select id="playerCharacter" class="menu-select">
+        <option value="">Select Character</option>
+      </select>
+    </div>
+    <div class="menu-item">
+      <label class="menu-label">Add Character:</label>
+      <select id="addCharacter" class="menu-select">
+        <option value="">Select Character to Add</option>
+      </select>
+      <button id="addCharacterBtn" class="menu-button">Add</button>
+    </div>
+    <div class="menu-item">
+      <label class="menu-checkbox">
+        <input type="checkbox" id="autoMoveToggle" class="checkbox-input">
+        <span>Auto Movement for NPCs</span>
+      </label>
+    </div>
+    <div class="menu-item">
+      <label class="menu-checkbox">
+        <input type="checkbox" id="hitboxToggle" checked class="checkbox-input">
+        <span>Show Hitbox</span>
+      </label>
+    </div>
+  </div>
+
+  <div id="error" class="error-message"></div>
+
+  <script type="module" src="render.js"></script>
+</body>
+</html>
