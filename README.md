@@ -1,2 +1,2 @@
 # ArknightsProject
-My mini project of Arknights
+My project of Arknights
