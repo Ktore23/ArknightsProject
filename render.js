@@ -17,6 +17,7 @@ var health = {};
 var attackHitboxes = [];
 var isLeftMouseClicked = false;
 var hasTriggeredAttack = false;
+var isDying = {}; // Trạng thái để theo dõi nhân vật đang trong animation "Die"
 
 // Khởi tạo Firebase
 const firebaseConfig = {
@@ -84,6 +85,7 @@ export function addCharacter(name) {
                 };
                 lastAnimation[name] = "Idle"; // Đặt animation ban đầu là "Idle"
                 health[name] = 50;
+                isDying[name] = false; // Khởi tạo trạng thái không chết
             }
             return true;
         }
@@ -110,6 +112,7 @@ export function initializeSelectedCharacter() {
             skeletons[selectedCharacter].skeleton.y = canvas.height / 2;
             lastAnimation[selectedCharacter] = "Move";
             health[selectedCharacter] = 50;
+            isDying[selectedCharacter] = false; // Khởi tạo trạng thái không chết
             console.log(`Successfully initialized character: ${selectedCharacter}`);
             lastFrameTime = Date.now() / 1000;
             requestAnimationFrame(render);
@@ -192,6 +195,7 @@ function init() {
                 velocities = {};
                 lastAnimation = {};
                 health = {};
+                isDying = {}; // Reset trạng thái chết
                 isLeftMouseClicked = false;
                 hasTriggeredAttack = false;
                 initializeSelectedCharacter();
@@ -326,7 +330,9 @@ function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
             console.log("Animation on track " + track.trackIndex + " started: " + track.animation.name);
             if (name === $("#playerCharacter").val() && track.animation.name === "Attack") {
                 isAttacking = true;
-                // Không đặt hasTriggeredAttack = true tại đây
+            }
+            if (track.animation.name === "Die") {
+                isDying[name] = true; // Đánh dấu nhân vật đang trong trạng thái chết
             }
         },
         interrupt: function (track) { console.log("Animation on track " + track.trackIndex + " interrupted"); },
@@ -340,14 +346,23 @@ function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
                 const previousAnim = lastAnimation[name] === "Attack" ? "Move" : lastAnimation[name] || "Move";
                 animationState.setAnimation(0, previousAnim, true);
                 console.log("Switched back to animation: " + previousAnim);
+            } else if (track.animation.name === "Die") {
+                console.log(`${name} Die animation completed, removing character`);
+                delete skeletons[name];
+                delete velocities[name];
+                delete health[name];
+                delete isDying[name];
+                if (Object.keys(skeletons).length === 0) {
+                    $("#playerCharacter").trigger("change");
+                }
             }
         },
         event: function (track, event) {
             console.log("Event on track " + track.trackIndex + " at time " + event.time + ": " + JSON.stringify(event));
-            if (name === $("#playerCharacter").val() && event.data.name === "OnAttack") {
+            if (event.data.name === "OnAttack") {
                 console.log(`Processing OnAttack event for ${name} at time ${event.time}`);
                 const hitboxes = Object.keys(skeletons).map(name => {
-                    const skeleton = skeletons[name].skeleton;
+                    const skeleton = skeletons[name]?.skeleton;
                     return { name, x: skeleton.x, y: skeleton.y, radius: 50, skeleton };
                 });
 
@@ -356,37 +371,51 @@ function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
                 attackHitboxes.forEach(attackHitbox => {
                     hitboxes.forEach(hitbox => {
                         if (attackHitbox.name === hitbox.name) return;
-                        const dx = hitbox.x - attackHitbox.x;
-                        const dy = (canvas.height - hitbox.y) - (canvas.height - attackHitbox.y);
+                        const dx = hitbox.x - attackHitbox.skeleton.x;
+                        const dy = hitbox.y - attackHitbox.skeleton.y;
                         const dist = Math.sqrt(dx * dx + dy * dy);
-                        console.log(`Checking collision: ${attackHitbox.name} vs ${hitbox.name}, dist: ${dist}, threshold: ${attackHitbox.radius + hitbox.radius}`);
-                        if (dist < attackHitbox.radius + hitbox.radius) {
-                            // Tính góc
-                            const angleToTarget = Math.atan2(dy, dx) * (180 / Math.PI); // Góc từ attackHitbox đến hitbox
-                            const angleToMouse = Math.atan2((canvas.height - mousePosition.y) - (canvas.height - attackHitbox.y), mousePosition.x - attackHitbox.x) * (180 / Math.PI); // Góc từ attackHitbox đến chuột
+                        const attackRangeExtension = 30;
+                        const effectiveAttackRadius = attackHitbox.radius + attackRangeExtension;
+                        console.log(`Checking collision: ${attackHitbox.name} vs ${hitbox.name}, dist: ${dist}, threshold: ${effectiveAttackRadius}`);
+                        if (dist < effectiveAttackRadius) {
+                            const angleToTarget = Math.atan2(-dy, dx) * (180 / Math.PI);
+                            const angleToMouse = Math.atan2(-(canvas.height - mousePosition.y - attackHitbox.skeleton.y), mousePosition.x - attackHitbox.skeleton.x) * (180 / Math.PI);
                             const angleDiff = Math.abs(angleToTarget - angleToMouse);
                             const normalizedAngleDiff = Math.min(angleDiff, 360 - angleDiff);
                             console.log(`Angle check: angleToTarget=${angleToTarget}, angleToMouse=${angleToMouse}, normalizedAngleDiff=${normalizedAngleDiff}`);
-                            if (normalizedAngleDiff <= 45) { // Giới hạn trong góc 90 độ
+                            if (normalizedAngleDiff <= 45) {
                                 if (health[hitbox.name] > 0) {
                                     health[hitbox.name] -= 25;
                                     console.log(`Đã tấn công ${hitbox.name}! Máu còn lại: ${health[hitbox.name]}`);
                                     if (health[hitbox.name] <= 0) {
-                                        console.log(`${hitbox.name} đã bị tiêu diệt!`);
-                                        delete skeletons[hitbox.name];
-                                        delete velocities[hitbox.name];
-                                        delete health[hitbox.name];
-                                        $("#playerCharacter").trigger("change");
-                                        $(document).ready(() => {
-                                            setupUI();
-                                        });
+                                        console.log(`${hitbox.name} đã hết máu, kiểm tra animation Die`);
+                                        const targetSkeleton = skeletons[hitbox.name];
+                                        if (targetSkeleton) {
+                                            const { state, skeleton } = targetSkeleton;
+                                            const dieAnimation = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "die")?.name;
+                                            if (dieAnimation) {
+                                                console.log(`Chuyển ${hitbox.name} sang animation Die`);
+                                                state.setAnimation(0, dieAnimation, false);
+                                            } else {
+                                                console.warn(`No Die animation for ${hitbox.name}, removing immediately`);
+                                                delete skeletons[hitbox.name];
+                                                delete velocities[hitbox.name];
+                                                delete health[hitbox.name];
+                                                delete isDying[hitbox.name];
+                                                if (Object.keys(skeletons).length === 0) {
+                                                    $("#playerCharacter").trigger("change");
+                                                }
+                                            }
+                                        } else {
+                                            console.error(`Skeleton for ${hitbox.name} not found during OnAttack`);
+                                        }
                                     }
                                 }
                             }
                         }
                     });
                 });
-                hasTriggeredAttack = true; // Đặt sau khi xử lý
+                hasTriggeredAttack = true;
             }
         }
     });
@@ -404,6 +433,12 @@ function calculateSetupPoseBounds(skeleton) {
 }
 
 function render() {
+    if (Object.keys(skeletons).length === 0) {
+        console.log("No skeletons to render, triggering character selection");
+        $("#playerCharacter").trigger("change");
+        return;
+    }
+
     var now = Date.now() / 1000;
     var delta = now - lastFrameTime;
     lastFrameTime = now;
@@ -432,7 +467,6 @@ function render() {
     const hitboxes = [];
     attackHitboxes = [];
 
-    // Tính toán va chạm vật lý trước khi cập nhật vị trí
     sortedSkeletons.forEach(({ name }) => {
         const { skeleton, bounds } = skeletons[name];
         const baseRadius = 50;
@@ -478,7 +512,7 @@ function render() {
 
         if (name === $("#playerCharacter").val()) {
             let vx = 0, vy = 0, speed = 100;
-            if (!isAttacking) {
+            if (!isAttacking && !isDying[name]) {
                 if (keys['ArrowLeft'] || keys['KeyA']) { vx = -speed; skeleton.scaleX = -1; }
                 if (keys['ArrowRight'] || keys['KeyD']) { vx = speed; skeleton.scaleX = 1; }
                 if (keys['ArrowUp'] || keys['KeyW']) vy = speed;
@@ -490,13 +524,13 @@ function render() {
                 skeleton.y = Math.max(margin + bounds.size.y / 2, Math.min(canvas.height - margin - bounds.size.y / 2, skeleton.y));
             }
 
-            if (isLeftMouseClicked && currentAnimation !== "Attack" && !isAttacking) {
+            if (isLeftMouseClicked && currentAnimation !== "Attack" && !isAttacking && !isDying[name]) {
                 lastAnimation[name] = currentAnimation;
                 state.setAnimation(0, "Attack", false);
                 isLeftMouseClicked = false;
-                hasTriggeredAttack = false; // Đặt lại để cho phép xử lý OnAttack
+                hasTriggeredAttack = false;
                 console.log("Triggered Attack animation");
-            } else if (!isLeftMouseClicked && currentAnimation !== "Attack" && !isAttacking) {
+            } else if (!isLeftMouseClicked && currentAnimation !== "Attack" && !isAttacking && !isDying[name]) {
                 const idleAnim = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "idle")?.name || skeleton.data.animations[0]?.name || "Idle";
                 const targetAnim = (vx !== 0 || vy !== 0) ? "Move" : idleAnim;
                 if (lastAnimation[name] !== targetAnim) {
@@ -515,15 +549,8 @@ function render() {
 
                 const attackRadius = 100;
                 const attackRangeExtension = 30;
-                let attackHitboxX = skeleton.x;
-                let attackHitboxY = skeleton.y;
-
-                if (distance > 0) {
-                    const nx = dx / distance;
-                    const ny = dy / distance;
-                    attackHitboxX += nx * attackRangeExtension;
-                    attackHitboxY += ny * attackRangeExtension;
-                }
+                const attackHitboxX = skeleton.x;
+                const attackHitboxY = skeleton.y;
 
                 const attackHitbox = { name, x: attackHitboxX, y: attackHitboxY, radius: attackRadius, skeleton };
                 attackHitboxes.push(attackHitbox);
@@ -535,48 +562,47 @@ function render() {
                     const angleToMouse = Math.atan2(-(canvas.height - mousePosition.y - skeleton.y), mousePosition.x - skeleton.x);
                     const startAngle = angleToMouse - Math.PI / 4;
                     const endAngle = angleToMouse + Math.PI / 4;
-                    hitboxCtx.arc(attackHitboxX, canvas.height - attackHitboxY, attackRadius, startAngle, endAngle);
+                    const effectiveAttackRadius = attackRadius + attackRangeExtension;
+                    hitboxCtx.arc(skeleton.x, canvas.height - skeleton.y, effectiveAttackRadius, startAngle, endAngle);
                     hitboxCtx.fill();
                     hitboxCtx.stroke();
-                    hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)";
+                    hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)"; // Reset lại màu đỏ
                 }
             }
         } else {
-            // Xử lý nhân vật không phải playerCharacter
-            if ($("#autoMoveToggle").is(":checked")) {
-                // Nếu vận tốc hiện tại là 0, khởi tạo vận tốc ngẫu nhiên
-                if (velocities[name].vx === 0 && velocities[name].vy === 0) {
-                    velocities[name].vx = (Math.random() - 0.5) * 200;
-                    velocities[name].vy = (Math.random() - 0.5) * 200;
-                    console.log(`Initialized velocity for ${name}: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
-                }
+            if (!isDying[name]) { // Chỉ cập nhật nếu nhân vật không đang trong trạng thái chết
+                if ($("#autoMoveToggle").is(":checked")) {
+                    if (velocities[name].vx === 0 && velocities[name].vy === 0) {
+                        velocities[name].vx = (Math.random() - 0.5) * 200;
+                        velocities[name].vy = (Math.random() - 0.5) * 200;
+                        console.log(`Initialized velocity for ${name}: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
+                    }
 
-                skeleton.x += velocities[name].vx * delta;
-                skeleton.y += velocities[name].vy * delta;
-                if (velocities[name].vx > 0) skeleton.scaleX = 1;
-                else if (velocities[name].vx < 0) skeleton.scaleX = -1;
+                    skeleton.x += velocities[name].vx * delta;
+                    skeleton.y += velocities[name].vy * delta;
+                    if (velocities[name].vx > 0) skeleton.scaleX = 1;
+                    else if (velocities[name].vx < 0) skeleton.scaleX = -1;
 
-                const margin = 0;
-                if (skeleton.x < margin + bounds.size.x / 2 || skeleton.x > canvas.width - margin - bounds.size.x / 2)
-                    velocities[name].vx *= -1;
-                if (skeleton.y < margin + bounds.size.y / 2 || skeleton.y > canvas.height - margin - bounds.size.y / 2)
-                    velocities[name].vy *= -1;
+                    const margin = 0;
+                    if (skeleton.x < margin + bounds.size.x / 2 || skeleton.x > canvas.width - margin - bounds.size.x / 2)
+                        velocities[name].vx *= -1;
+                    if (skeleton.y < margin + bounds.size.y / 2 || skeleton.y > canvas.height - margin - bounds.size.y / 2)
+                        velocities[name].vy *= -1;
 
-                // Chuyển sang animation "Move" nếu nhân vật đang di chuyển
-                if (currentAnimation !== "Move") {
-                    state.setAnimation(0, "Move", true);
-                    lastAnimation[name] = "Move";
-                    console.log(`Switched ${name} to Move animation due to auto movement`);
-                }
-            } else {
-                // Nếu autoMoveToggle tắt, dừng di chuyển và chuyển về "Idle"
-                velocities[name].vx = 0;
-                velocities[name].vy = 0;
-                if (currentAnimation !== "Idle") {
-                    const idleAnim = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "idle")?.name || skeleton.data.animations[0]?.name || "Idle";
-                    state.setAnimation(0, idleAnim, true);
-                    lastAnimation[name] = idleAnim;
-                    console.log(`Switched ${name} to Idle animation due to auto movement being off`);
+                    if (currentAnimation !== "Move") {
+                        state.setAnimation(0, "Move", true);
+                        lastAnimation[name] = "Move";
+                        console.log(`Switched ${name} to Move animation due to auto movement`);
+                    }
+                } else {
+                    velocities[name].vx = 0;
+                    velocities[name].vy = 0;
+                    if (currentAnimation !== "Idle") {
+                        const idleAnim = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "idle")?.name || skeleton.data.animations[0]?.name || "Idle";
+                        state.setAnimation(0, idleAnim, true);
+                        lastAnimation[name] = idleAnim;
+                        console.log(`Switched ${name} to Idle animation due to auto movement being off`);
+                    }
                 }
             }
         }
@@ -593,37 +619,30 @@ function render() {
         skeletonRenderer.draw(batcher, skeleton);
 
         if (showHitbox) {
-            const hitbox = hitboxes.find(h => h.name === name);
+            hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)"; // Đặt lại màu đỏ cho hitbox chính
             hitboxCtx.beginPath();
-            hitboxCtx.arc(hitbox.x, canvas.height - hitbox.y, hitbox.radius, 0, 2 * Math.PI);
+            hitboxCtx.arc(current.x, canvas.height - current.y, current.radius, 0, 2 * Math.PI);
             hitboxCtx.stroke();
         }
 
-        // Render thanh máu độc lập với hitbox
-        if (showHealthBar) {
-            const hitbox = hitboxes.find(h => h.name === name);
-            if (health[name] > 0) {
-                const healthWidth = 50;
-                const healthHeight = 5;
-                const x = hitbox.x - healthWidth / 2;
-                const y = canvas.height - (hitbox.y + hitbox.radius + 150);
-                const healthPercentage = Math.max(0, health[name]) / 50;
+        if (showHealthBar && health[name] > 0) {
+            const healthWidth = 50;
+            const healthHeight = 5;
+            const x = current.x - healthWidth / 2;
+            const y = canvas.height - (current.y + current.radius + 150);
+            const healthPercentage = Math.max(0, health[name]) / 50;
 
-                hitboxCtx.fillStyle = "rgba(100, 100, 100, 0.8)";
-                hitboxCtx.fillRect(x, y, healthWidth, healthHeight);
+            hitboxCtx.fillStyle = "rgba(100, 100, 100, 0.8)";
+            hitboxCtx.fillRect(x, y, healthWidth, healthHeight);
 
-                const red = Math.floor((1 - healthPercentage) * 255);
-                const green = Math.floor(healthPercentage * 255);
-                hitboxCtx.fillStyle = `rgba(${red}, ${green}, 0, 0.8)`;
-                hitboxCtx.fillRect(x, y, healthWidth * healthPercentage, healthHeight);
+            const red = Math.floor((1 - healthPercentage) * 255);
+            const green = Math.floor(healthPercentage * 255);
+            hitboxCtx.fillStyle = `rgba(${red}, ${green}, 0, 0.8)`;
+            hitboxCtx.fillRect(x, y, healthWidth * healthPercentage, healthHeight);
 
-                hitboxCtx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-                hitboxCtx.lineWidth = 1;
-                hitboxCtx.strokeRect(x, y, healthWidth, healthHeight);
-
-                hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)";
-                hitboxCtx.lineWidth = 2;
-            }
+            hitboxCtx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+            hitboxCtx.lineWidth = 1;
+            hitboxCtx.strokeRect(x, y, healthWidth, healthHeight);
         }
     });
 
