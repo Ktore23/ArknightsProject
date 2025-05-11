@@ -9,13 +9,17 @@ var skeletonData = []; // Lưu trữ toàn bộ dữ liệu nhân vật từ Fir
 var velocities = {};
 var keys = {};
 var lastAnimation = {};
-var showHitbox = true;
+var showHitbox = true; // Điều khiển hiển thị hitbox
+var showHealthBar = true; // Điều khiển hiển thị thanh máu, mặc định luôn hiển thị
 var isAttacking = false;
 var mousePosition = { x: 0, y: 0 };
 var health = {};
 var attackHitboxes = [];
 var isLeftMouseClicked = false;
-var hasTriggeredAttack = false; // Biến mới để theo dõi trạng thái Attack
+var hasTriggeredAttack = false;
+var isDying = {}; // Trạng thái để theo dõi nhân vật đang trong animation "Die"
+var idleTime = {}; // Thời gian đứng im của từng nhân vật (giây)
+var isInRelaxState = {}; // Theo dõi trạng thái relax của từng nhân vật
 
 // Khởi tạo Firebase
 const firebaseConfig = {
@@ -28,6 +32,22 @@ const firebaseConfig = {
 };
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+
+// Xuất showHitbox và hàm setter
+export { showHitbox };
+
+// Hàm setter để thay đổi giá trị showHitbox
+export function setShowHitbox(value) {
+    showHitbox = value;
+}
+
+// Xuất showHealthBar (tùy chọn nếu muốn điều khiển qua UI)
+export { showHealthBar };
+
+// Hàm setter để thay đổi giá trị showHealthBar (tùy chọn)
+export function setShowHealthBar(value) {
+    showHealthBar = value;
+}
 
 // Hàm để chia sẻ skeletonNames với các module khác
 export function getSkeletonNames() {
@@ -54,7 +74,7 @@ export function addCharacter(name) {
     }
 
     try {
-        const skeleton = loadSkeleton(name, "Move", false, "default", skeletonData);
+        const skeleton = loadSkeleton(name, "Idle", false, "default", skeletonData);
         if (skeleton) {
             const index = Object.keys(skeletons).length;
             skeletons[name] = skeleton;
@@ -62,12 +82,15 @@ export function addCharacter(name) {
             skeletons[name].skeleton.y = canvas.height / 2;
             if (name !== $("#playerCharacter").val()) {
                 velocities[name] = {
-                    vx: (Math.random() - 0.5) * 200,
-                    vy: (Math.random() - 0.5) * 200
+                    vx: 0,
+                    vy: 0
                 };
+                lastAnimation[name] = "Idle";
+                health[name] = 50;
+                isDying[name] = false;
+                idleTime[name] = 0;
+                isInRelaxState[name] = false;
             }
-            lastAnimation[name] = "Move";
-            health[name] = 50;
             return true;
         }
     } catch (e) {
@@ -93,6 +116,9 @@ export function initializeSelectedCharacter() {
             skeletons[selectedCharacter].skeleton.y = canvas.height / 2;
             lastAnimation[selectedCharacter] = "Move";
             health[selectedCharacter] = 50;
+            isDying[selectedCharacter] = false;
+            idleTime[selectedCharacter] = 0;
+            isInRelaxState[selectedCharacter] = false;
             console.log(`Successfully initialized character: ${selectedCharacter}`);
             lastFrameTime = Date.now() / 1000;
             requestAnimationFrame(render);
@@ -104,6 +130,12 @@ export function initializeSelectedCharacter() {
         console.error(`Error loading skeleton for ${selectedCharacter}:`, e.message);
         document.getElementById("error").textContent += `Error loading skeleton for ${selectedCharacter}: ${e.message}. `;
     }
+}
+
+// Hàm làm mới canvas để phản ánh thay đổi showHitbox hoặc showHealthBar
+export function refreshCanvas() {
+    hitboxCtx.clearRect(0, 0, hitboxCanvas.width, hitboxCanvas.height);
+    requestAnimationFrame(render);
 }
 
 function init() {
@@ -154,28 +186,14 @@ function init() {
             console.log(`skelPath: ${character.skelPath}, atlasPath: ${character.atlasPath}`);
             assetManager.loadBinary(character.skelPath);
             assetManager.loadTextureAtlas(character.atlasPath);
-        });
-
-        $(document).ready(() => {
-            console.log("Document ready, calling setupUI...");
-            setupUI();
-            const playerCharacterSelect = $("#playerCharacter");
-            if (!playerCharacterSelect.length) {
-                console.error("Dropdown with id 'playerCharacter' not found in DOM. Cannot attach change event.");
-                return;
+            if (character.name === "surtr_summer_weapon") {
+                assetManager.loadBinary("assets/Operators/Surtr/SurtrSummer/surtr_summer.skel");
+                assetManager.loadTextureAtlas("assets/Operators/Surtr/SurtrSummer/surtr_summer.atlas");
             }
-            playerCharacterSelect.on("change", function() {
-                skeletons = {};
-                velocities = {};
-                lastAnimation = {};
-                health = {};
-                isLeftMouseClicked = false;
-                hasTriggeredAttack = false;
-                initializeSelectedCharacter();
-            });
         });
 
-        requestAnimationFrame(checkAssetsLoaded);
+        // Đợi tất cả tài nguyên được tải trước khi tiếp tục
+        requestAnimationFrame(checkAllAssetsLoaded);
     }).catch(error => {
         console.error("Error in loadCharactersFromFirebase:", error);
         document.getElementById("error").textContent = "Error loading characters: " + error.message;
@@ -224,11 +242,34 @@ function init() {
     });
 }
 
-function checkAssetsLoaded() {
+function checkAllAssetsLoaded() {
     if (assetManager.isLoadingComplete()) {
-        console.log("Assets preloading complete, waiting for player selection...");
+        console.log("All assets preloaded successfully, proceeding to setupUI...");
+        $(document).ready(() => {
+            console.log("Document ready, calling setupUI...");
+            setupUI();
+            const playerCharacterSelect = $("#playerCharacter");
+            if (!playerCharacterSelect.length) {
+                console.error("Dropdown with id 'playerCharacter' not found in DOM. Cannot attach change event.");
+                return;
+            }
+            playerCharacterSelect.on("change", function() {
+                skeletons = {};
+                velocities = {};
+                lastAnimation = {};
+                health = {};
+                isDying = {};
+                idleTime = {};
+                isInRelaxState = {};
+                isLeftMouseClicked = false;
+                hasTriggeredAttack = false;
+                initializeSelectedCharacter();
+            });
+        });
+        requestAnimationFrame(render);
     } else {
-        requestAnimationFrame(checkAssetsLoaded);
+        console.log("Waiting for assets to preload...");
+        requestAnimationFrame(checkAllAssetsLoaded);
     }
 }
 
@@ -303,7 +344,12 @@ function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
             console.log("Animation on track " + track.trackIndex + " started: " + track.animation.name);
             if (name === $("#playerCharacter").val() && track.animation.name === "Attack") {
                 isAttacking = true;
-                hasTriggeredAttack = true;
+            }
+            if (track.animation.name === "Die") {
+                isDying[name] = true;
+            }
+            if (track.animation.name === "relax") {
+                isInRelaxState[name] = true;
             }
         },
         interrupt: function (track) { console.log("Animation on track " + track.trackIndex + " interrupted"); },
@@ -313,51 +359,81 @@ function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
             console.log("Animation on track " + track.trackIndex + " completed: " + track.animation.name);
             if (name === $("#playerCharacter").val() && track.animation.name === "Attack") {
                 isAttacking = false;
-                hasTriggeredAttack = false;
                 attackHitboxes = [];
                 const previousAnim = lastAnimation[name] === "Attack" ? "Move" : lastAnimation[name] || "Move";
                 animationState.setAnimation(0, previousAnim, true);
                 console.log("Switched back to animation: " + previousAnim);
+            } else if (track.animation.name === "Die") {
+                console.log(`${name} Die animation completed, removing character`);
+                delete skeletons[name];
+                delete velocities[name];
+                delete health[name];
+                delete isDying[name];
+                delete isInRelaxState[name];
+                if (Object.keys(skeletons).length === 0) {
+                    $("#playerCharacter").trigger("change");
+                }
             }
         },
         event: function (track, event) {
-            console.log("Event on track " + track.trackIndex + ": " + JSON.stringify(event));
-            if (name === $("#playerCharacter").val() && event.data.name === "OnAttack") {
+            console.log("Event on track " + track.trackIndex + " at time " + event.time + ": " + JSON.stringify(event));
+            if (event.data.name === "OnAttack") {
+                console.log(`Processing OnAttack event for ${name} at time ${event.time}`);
                 const hitboxes = Object.keys(skeletons).map(name => {
-                    const skeleton = skeletons[name].skeleton;
+                    const skeleton = skeletons[name]?.skeleton;
                     return { name, x: skeleton.x, y: skeleton.y, radius: 50, skeleton };
                 });
+
+                console.log("Current attackHitboxes:", attackHitboxes);
 
                 attackHitboxes.forEach(attackHitbox => {
                     hitboxes.forEach(hitbox => {
                         if (attackHitbox.name === hitbox.name) return;
-                        const dx = hitbox.x - attackHitbox.x;
-                        const dy = hitbox.y - attackHitbox.y;
+                        const dx = hitbox.x - attackHitbox.skeleton.x;
+                        const dy = hitbox.y - attackHitbox.skeleton.y;
                         const dist = Math.sqrt(dx * dx + dy * dy);
-                        if (dist < attackHitbox.radius + hitbox.radius) {
-                            const angleToTarget = Math.atan2(dy, dx) * (180 / Math.PI);
-                            const angleToMouse = Math.atan2(canvas.height - mousePosition.y - attackHitbox.y, mousePosition.x - attackHitbox.x) * (180 / Math.PI);
+                        const attackRangeExtension = 30;
+                        const effectiveAttackRadius = attackHitbox.radius + attackRangeExtension;
+                        console.log(`Checking collision: ${attackHitbox.name} vs ${hitbox.name}, dist: ${dist}, threshold: ${effectiveAttackRadius}`);
+                        if (dist < effectiveAttackRadius) {
+                            const angleToTarget = Math.atan2(-dy, dx) * (180 / Math.PI);
+                            const angleToMouse = Math.atan2(-(canvas.height - mousePosition.y - attackHitbox.skeleton.y), mousePosition.x - attackHitbox.skeleton.x) * (180 / Math.PI);
                             const angleDiff = Math.abs(angleToTarget - angleToMouse);
                             const normalizedAngleDiff = Math.min(angleDiff, 360 - angleDiff);
+                            console.log(`Angle check: angleToTarget=${angleToTarget}, angleToMouse=${angleToMouse}, normalizedAngleDiff=${normalizedAngleDiff}`);
                             if (normalizedAngleDiff <= 45) {
                                 if (health[hitbox.name] > 0) {
                                     health[hitbox.name] -= 25;
                                     console.log(`Đã tấn công ${hitbox.name}! Máu còn lại: ${health[hitbox.name]}`);
                                     if (health[hitbox.name] <= 0) {
-                                        console.log(`${hitbox.name} đã bị tiêu diệt!`);
-                                        delete skeletons[hitbox.name];
-                                        delete velocities[hitbox.name];
-                                        delete health[hitbox.name];
-                                        $("#playerCharacter").trigger("change");
-                                        $(document).ready(() => {
-                                            setupUI();
-                                        });
+                                        console.log(`${hitbox.name} đã hết máu, kiểm tra animation Die`);
+                                        const targetSkeleton = skeletons[hitbox.name];
+                                        if (targetSkeleton) {
+                                            const { state, skeleton } = targetSkeleton;
+                                            const dieAnimation = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "die")?.name;
+                                            if (dieAnimation) {
+                                                console.log(`Chuyển ${hitbox.name} sang animation Die`);
+                                                state.setAnimation(0, dieAnimation, false);
+                                            } else {
+                                                console.warn(`No Die animation for ${hitbox.name}, removing immediately`);
+                                                delete skeletons[hitbox.name];
+                                                delete velocities[hitbox.name];
+                                                delete health[hitbox.name];
+                                                delete isDying[hitbox.name];
+                                                if (Object.keys(skeletons).length === 0) {
+                                                    $("#playerCharacter").trigger("change");
+                                                }
+                                            }
+                                        } else {
+                                            console.error(`Skeleton for ${hitbox.name} not found during OnAttack`);
+                                        }
                                     }
                                 }
                             }
                         }
                     });
                 });
+                hasTriggeredAttack = true;
             }
         }
     });
@@ -374,7 +450,96 @@ function calculateSetupPoseBounds(skeleton) {
     return { offset: offset, size: size };
 }
 
+function switchSkeletonFile(name, newSkelPath, newAtlasPath, initialAnimation) {
+    if (!skeletons[name]) {
+        console.error(`Character ${name} not found`);
+        return false;
+    }
+
+    let skelData = assetManager.get(newSkelPath);
+    let atlasData = assetManager.get(newAtlasPath);
+    if (!skelData || !atlasData) {
+        console.warn(`Assets for ${newSkelPath} or ${newAtlasPath} not preloaded, attempting to load now...`);
+        assetManager.loadBinary(newSkelPath);
+        assetManager.loadTextureAtlas(newAtlasPath);
+    }
+
+    let retryCount = 0;
+    const maxRetries = 10;
+    function attemptSwitch() {
+        if (retryCount >= maxRetries) {
+            console.error(`Failed to load assets for ${newSkelPath} after ${maxRetries} retries`);
+            return;
+        }
+
+        skelData = assetManager.get(newSkelPath);
+        atlasData = assetManager.get(newAtlasPath);
+        if (skelData && atlasData && assetManager.isLoadingComplete()) {
+            const atlas = atlasData;
+            if (!atlas) {
+                console.error(`Atlas not loaded for ${newAtlasPath}`);
+                return;
+            }
+            const atlasLoader = new spine.AtlasAttachmentLoader(atlas);
+            const skeletonBinary = new spine.SkeletonBinary(atlasLoader);
+            skeletonBinary.scale = 0.5;
+
+            const binaryData = skelData;
+            if (!binaryData) {
+                console.error(`Skeleton binary not loaded for ${newSkelPath}`);
+                return;
+            }
+            const newSkeletonData = skeletonBinary.readSkeletonData(binaryData);
+            if (!newSkeletonData) {
+                console.error(`Failed to parse skeleton data from ${newSkelPath}`);
+                return;
+            }
+
+            const oldSkeleton = skeletons[name].skeleton;
+            const oldX = oldSkeleton.x;
+            const oldY = oldSkeleton.y;
+            const oldScaleX = oldSkeleton.scaleX;
+            const oldScaleY = oldSkeleton.scaleY;
+
+            const newSkeleton = new spine.Skeleton(newSkeletonData);
+            newSkeleton.setSkinByName("default");
+            newSkeleton.x = oldX;
+            newSkeleton.y = oldY;
+            newSkeleton.scaleX = oldScaleX;
+            newSkeleton.scaleY = oldScaleY;
+            newSkeleton.setToSetupPose(); // Reset trạng thái skeleton
+
+            const animationStateData = new spine.AnimationStateData(newSkeletonData);
+            const animationState = new spine.AnimationState(animationStateData);
+            const animationToUse = newSkeletonData.animations.find(anim => anim.name.toLowerCase() === initialAnimation.toLowerCase())?.name;
+            if (animationToUse) {
+                console.log(`Setting animation ${animationToUse} for ${name} with loop`);
+                animationState.setAnimation(0, animationToUse, true); // Đảm bảo loop
+            } else {
+                console.warn(`Animation ${initialAnimation} not found in ${newSkelPath}, using first animation`);
+                animationState.setAnimation(0, newSkeletonData.animations[0]?.name || "Idle", true);
+            }
+
+            skeletons[name] = { skeleton: newSkeleton, state: animationState, bounds: calculateSetupPoseBounds(newSkeleton), premultipliedAlpha: skeletons[name].premultipliedAlpha };
+            console.log(`Successfully switched ${name} to new skeleton file: ${newSkelPath} with animation ${animationState.tracks[0]?.animation?.name}`);
+        } else {
+            console.warn(`Assets for ${newSkelPath} not yet loaded, retrying... (attempt ${retryCount + 1}/${maxRetries})`);
+            retryCount++;
+            requestAnimationFrame(attemptSwitch);
+        }
+    }
+
+    attemptSwitch();
+    return true;
+}
+
 function render() {
+    if (Object.keys(skeletons).length === 0) {
+        console.log("No skeletons to render, triggering character selection");
+        $("#playerCharacter").trigger("change");
+        return;
+    }
+
     var now = Date.now() / 1000;
     var delta = now - lastFrameTime;
     lastFrameTime = now;
@@ -383,6 +548,15 @@ function render() {
 
     gl.clearColor(0.3, 0.3, 0.3, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
+
+    try {
+        if (batcher.isDrawing) {
+            batcher.end();
+            console.log("Forced batcher.end() to resolve drawing state");
+        }
+    } catch (e) {
+        console.warn("Error checking batcher state:", e.message);
+    }
 
     shader.bind();
     shader.setUniformi(spine.webgl.Shader.SAMPLER, 0);
@@ -404,16 +578,52 @@ function render() {
     attackHitboxes = [];
 
     sortedSkeletons.forEach(({ name }) => {
-        const { skeleton, state, bounds, premultipliedAlpha } = skeletons[name];
-        const currentAnimation = state.tracks[0]?.animation?.name || skeleton.data.animations[0]?.name;
-
+        const { skeleton, bounds } = skeletons[name];
         const baseRadius = 50;
         const current = { name, x: skeleton.x, y: skeleton.y, radius: baseRadius, skeleton };
         hitboxes.push(current);
+    });
+
+    for (let i = 0; i < hitboxes.length; i++) {
+        for (let j = i + 1; j < hitboxes.length; j++) {
+            const hitboxA = hitboxes[i];
+            const hitboxB = hitboxes[j];
+            const dx = hitboxB.x - hitboxA.x;
+            const dy = hitboxB.y - hitboxA.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const minDist = hitboxA.radius + hitboxB.radius;
+
+            if (dist < minDist && dist > 0) {
+                console.log(`Collision detected between ${hitboxA.name} and ${hitboxB.name}, distance: ${dist}, minDist: ${minDist}`);
+                const overlap = minDist - dist;
+                const pushFactor = overlap / dist / 2;
+                const pushX = dx * pushFactor;
+                const pushY = dy * pushFactor;
+
+                hitboxA.skeleton.x -= pushX;
+                hitboxA.skeleton.y -= pushY;
+                hitboxB.skeleton.x += pushX;
+                hitboxB.skeleton.y += pushY;
+
+                hitboxA.x = hitboxA.skeleton.x;
+                hitboxA.y = hitboxA.skeleton.y;
+                hitboxB.x = hitboxB.skeleton.x;
+                hitboxB.y = hitboxB.skeleton.y;
+            }
+        }
+    }
+
+    sortedSkeletons.forEach(({ name }) => {
+        const { skeleton, state, bounds, premultipliedAlpha } = skeletons[name];
+        const currentAnimation = state.tracks[0]?.animation?.name || skeleton.data.animations[0]?.name;
+        console.log(`Current animation for ${name}: ${currentAnimation}`); // Debug animation hiện tại
+
+        const baseRadius = 50;
+        const current = hitboxes.find(h => h.name === name);
 
         if (name === $("#playerCharacter").val()) {
             let vx = 0, vy = 0, speed = 100;
-            if (!isAttacking) {
+            if (!isAttacking && !isDying[name]) {
                 if (keys['ArrowLeft'] || keys['KeyA']) { vx = -speed; skeleton.scaleX = -1; }
                 if (keys['ArrowRight'] || keys['KeyD']) { vx = speed; skeleton.scaleX = 1; }
                 if (keys['ArrowUp'] || keys['KeyW']) vy = speed;
@@ -425,19 +635,53 @@ function render() {
                 skeleton.y = Math.max(margin + bounds.size.y / 2, Math.min(canvas.height - margin - bounds.size.y / 2, skeleton.y));
             }
 
-            if (isLeftMouseClicked && currentAnimation !== "Attack" && !hasTriggeredAttack) {
-                lastAnimation[name] = currentAnimation;
-                state.setAnimation(0, "Attack", false);
-                isLeftMouseClicked = false;
-                hasTriggeredAttack = true;
-                console.log("Triggered Attack animation");
-            } else if (!isLeftMouseClicked && currentAnimation !== "Attack" && !isAttacking) {
+            if (isLeftMouseClicked && currentAnimation !== "Attack" && !isAttacking && !isDying[name]) {
+                const attackAnim = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "attack")?.name;
+                if (attackAnim) {
+                    lastAnimation[name] = currentAnimation;
+                    state.setAnimation(0, attackAnim, false);
+                    isLeftMouseClicked = false;
+                    hasTriggeredAttack = false;
+                    console.log("Triggered Attack animation");
+                } else {
+                    console.warn(`No Attack animation for ${name}, skipping attack`);
+                }
+            } else if (!isLeftMouseClicked && currentAnimation !== "Attack" && !isAttacking && !isDying[name]) {
                 const idleAnim = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "idle")?.name || skeleton.data.animations[0]?.name || "Idle";
-                const targetAnim = (vx !== 0 || vy !== 0) ? "Move" : idleAnim;
-                if (lastAnimation[name] !== targetAnim) {
-                    state.setAnimation(0, targetAnim, true);
-                    lastAnimation[name] = targetAnim;
-                    console.log("Switched to animation: " + targetAnim);
+                const targetAnim = (vx !== 0 || vy !== 0) ? "Move" : (isInRelaxState[name] ? "relax" : idleAnim);
+                console.log(`Target animation for ${name}: ${targetAnim}, vx: ${vx}, vy: ${vy}, isInRelaxState: ${isInRelaxState[name]}`); // Debug
+                if (lastAnimation[name] !== targetAnim && !isInRelaxState[name]) { // Chỉ thay đổi nếu không trong relax
+                    if (vx !== 0 || vy !== 0) {
+                        state.setAnimation(0, targetAnim, true);
+                        lastAnimation[name] = targetAnim;
+                        console.log("Switched to animation: " + targetAnim);
+                    } else {
+                        state.setAnimation(0, targetAnim, true);
+                        lastAnimation[name] = targetAnim;
+                        console.log("Switched to animation: " + targetAnim);
+                    }
+                }
+                // Xử lý chuyển từ relax về Move
+                if ((vx !== 0 || vy !== 0) && isInRelaxState[name]) {
+                    const originalSkelPath = skeletonData.find(c => c.name === name).skelPath;
+                    const originalAtlasPath = skeletonData.find(c => c.name === name).atlasPath;
+                    switchSkeletonFile(name, originalSkelPath, originalAtlasPath, "Move");
+                    isInRelaxState[name] = false; // Reset trạng thái relax
+                    lastAnimation[name] = "Move";
+                    console.log(`Switched back to ${name} with Move animation from relax`);
+                }
+                // Tách logic idleTime ra khỏi điều kiện thay đổi animation
+                if (vx === 0 && vy === 0 && !isInRelaxState[name]) {
+                    idleTime[name] += delta;
+                    console.log(`Idle time for ${name} (player): ${idleTime[name]}s`);
+                    if (idleTime[name] >= 5 && name === "surtr_summer_weapon") {
+                        switchSkeletonFile(name, "assets/Operators/Surtr/SurtrSummer/surtr_summer.skel", "assets/Operators/Surtr/SurtrSummer/surtr_summer.atlas", "relax");
+                        isInRelaxState[name] = true;
+                        idleTime[name] = 0;
+                        console.log(`Switched to relax for ${name}`);
+                    }
+                } else {
+                    idleTime[name] = 0;
                 }
             }
 
@@ -450,15 +694,8 @@ function render() {
 
                 const attackRadius = 100;
                 const attackRangeExtension = 30;
-                let attackHitboxX = skeleton.x;
-                let attackHitboxY = skeleton.y;
-
-                if (distance > 0) {
-                    const nx = dx / distance;
-                    const ny = dy / distance;
-                    attackHitboxX += nx * attackRangeExtension;
-                    attackHitboxY += ny * attackRangeExtension;
-                }
+                const attackHitboxX = skeleton.x;
+                const attackHitboxY = skeleton.y;
 
                 const attackHitbox = { name, x: attackHitboxX, y: attackHitboxY, radius: attackRadius, skeleton };
                 attackHitboxes.push(attackHitbox);
@@ -470,60 +707,99 @@ function render() {
                     const angleToMouse = Math.atan2(-(canvas.height - mousePosition.y - skeleton.y), mousePosition.x - skeleton.x);
                     const startAngle = angleToMouse - Math.PI / 4;
                     const endAngle = angleToMouse + Math.PI / 4;
-                    hitboxCtx.arc(skeleton.x, canvas.height - skeleton.y, attackRadius, startAngle, endAngle);
+                    const effectiveAttackRadius = attackRadius + attackRangeExtension;
+                    hitboxCtx.arc(skeleton.x, canvas.height - skeleton.y, effectiveAttackRadius, startAngle, endAngle);
                     hitboxCtx.fill();
                     hitboxCtx.stroke();
                     hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)";
                 }
             }
-        } else if ($("#autoMoveToggle").is(":checked")) {
-            skeleton.x += velocities[name].vx * delta;
-            skeleton.y += velocities[name].vy * delta;
-            if (velocities[name].vx > 0) skeleton.scaleX = 1;
-            else if (velocities[name].vx < 0) skeleton.scaleX = -1;
-            const margin = 0;
-            if (skeleton.x < margin + bounds.size.x / 2 || skeleton.x > canvas.width - margin - bounds.size.x / 2)
-                velocities[name].vx *= -1;
-            if (skeleton.y < margin + bounds.size.y / 2 || skeleton.y > canvas.height - margin - bounds.size.y / 2)
-                velocities[name].vy *= -1;
+        } else {
+            if (!isDying[name]) {
+                if ($("#autoMoveToggle").is(":checked")) {
+                    if (velocities[name].vx === 0 && velocities[name].vy === 0) {
+                        velocities[name].vx = (Math.random() - 0.5) * 200;
+                        velocities[name].vy = (Math.random() - 0.5) * 200;
+                        console.log(`Initialized velocity for ${name}: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
+                    }
+
+                    skeleton.x += velocities[name].vx * delta;
+                    skeleton.y += velocities[name].vy * delta;
+                    if (velocities[name].vx > 0) skeleton.scaleX = 1;
+                    else if (velocities[name].vx < 0) skeleton.scaleX = -1;
+
+                    const margin = 0;
+                    if (skeleton.x < margin + bounds.size.x / 2 || skeleton.x > canvas.width - margin - bounds.size.x / 2)
+                        velocities[name].vx *= -1;
+                    if (skeleton.y < margin + bounds.size.y / 2 || skeleton.y > canvas.height - margin - bounds.size.y / 2)
+                        velocities[name].vy *= -1;
+
+                    if (currentAnimation !== "Move") {
+                        state.setAnimation(0, "Move", true);
+                        lastAnimation[name] = "Move";
+                        console.log(`Switched ${name} to Move animation due to auto movement`);
+                    }
+                } else {
+                    velocities[name].vx = 0;
+                    velocities[name].vy = 0;
+                    if (currentAnimation !== "Idle") {
+                        const idleAnim = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "idle")?.name || skeleton.data.animations[0]?.name || "Idle";
+                        state.setAnimation(0, idleAnim, true);
+                        lastAnimation[name] = idleAnim;
+                        console.log(`Switched ${name} to Idle animation due to auto movement being off`);
+                    }
+                }
+
+                if (velocities[name].vx === 0 && velocities[name].vy === 0) {
+                    idleTime[name] += delta;
+                    console.log(`Idle time for ${name} (other): ${idleTime[name]}s`);
+                    if (idleTime[name] >= 5 && name === "surtr_summer_weapon") {
+                        switchSkeletonFile(name, "assets/Operators/Surtr/SurtrSummer/surtr_summer.skel", "assets/Operators/Surtr/SurtrSummer/surtr_summer.atlas", "relax");
+                        isInRelaxState[name] = true;
+                        idleTime[name] = 0;
+                    }
+                } else {
+                    idleTime[name] = 0;
+                }
+            }
         }
 
-        state.update(delta);
-        state.apply(skeleton);
-        skeleton.updateWorldTransform();
+        current.x = skeleton.x;
+        current.y = skeleton.y;
+
+        state.update(delta); // Đảm bảo update animation state trước khi apply
+        state.apply(skeleton); // Apply animation state vào skeleton
+        skeleton.updateWorldTransform(); // Cập nhật transform của skeleton
 
         skeletonRenderer.vertexEffect = null;
         skeletonRenderer.premultipliedAlpha = premultipliedAlpha;
         skeletonRenderer.draw(batcher, skeleton);
 
         if (showHitbox) {
-            const hitbox = hitboxes.find(h => h.name === name);
+            hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)";
             hitboxCtx.beginPath();
-            hitboxCtx.arc(hitbox.x, canvas.height - hitbox.y, hitbox.radius, 0, 2 * Math.PI);
+            hitboxCtx.arc(current.x, canvas.height - current.y, current.radius, 0, 2 * Math.PI);
             hitboxCtx.stroke();
+        }
 
-            if (health[name] > 0) {
-                const healthWidth = 50;
-                const healthHeight = 5;
-                const x = hitbox.x - healthWidth / 2;
-                const y = canvas.height - (hitbox.y + hitbox.radius + 150);
-                const healthPercentage = Math.max(0, health[name]) / 50;
+        if (showHealthBar && health[name] > 0) {
+            const healthWidth = 50;
+            const healthHeight = 5;
+            const x = current.x - healthWidth / 2;
+            const y = canvas.height - (current.y + current.radius + 150);
+            const healthPercentage = Math.max(0, health[name]) / 50;
 
-                hitboxCtx.fillStyle = "rgba(100, 100, 100, 0.8)";
-                hitboxCtx.fillRect(x, y, healthWidth, healthHeight);
+            hitboxCtx.fillStyle = "rgba(100, 100, 100, 0.8)";
+            hitboxCtx.fillRect(x, y, healthWidth, healthHeight);
 
-                const red = Math.floor((1 - healthPercentage) * 255);
-                const green = Math.floor(healthPercentage * 255);
-                hitboxCtx.fillStyle = `rgba(${red}, ${green}, 0, 0.8)`;
-                hitboxCtx.fillRect(x, y, healthWidth * healthPercentage, healthHeight);
+            const red = Math.floor((1 - healthPercentage) * 255);
+            const green = Math.floor(healthPercentage * 255);
+            hitboxCtx.fillStyle = `rgba(${red}, ${green}, 0, 0.8)`;
+            hitboxCtx.fillRect(x, y, healthWidth * healthPercentage, healthHeight);
 
-                hitboxCtx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-                hitboxCtx.lineWidth = 1;
-                hitboxCtx.strokeRect(x, y, healthWidth, healthHeight);
-
-                hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)";
-                hitboxCtx.lineWidth = 2;
-            }
+            hitboxCtx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+            hitboxCtx.lineWidth = 1;
+            hitboxCtx.strokeRect(x, y, healthWidth, healthHeight);
         }
     });
 

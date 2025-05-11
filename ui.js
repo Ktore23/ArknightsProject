@@ -28,6 +28,7 @@ function setupUI() {
     // Cập nhật dropdown playerCharacter
     const playerCharacterSelect = $("#playerCharacter");
     playerCharacterSelect.empty();
+    playerCharacterSelect.append('<option value="">Chọn nhân vật để chơi</option>');
     skeletonNames.forEach(name => {
         const character = availableCharacters.find(c => c.name === name);
         playerCharacterSelect.append(`<option value="${name}">${name} (${character.type})</option>`);
@@ -36,7 +37,7 @@ function setupUI() {
     // Cập nhật dropdown addCharacter
     const addCharacterSelect = $("#addCharacter");
     addCharacterSelect.empty();
-    addCharacterSelect.append('<option value="">Select a character to add</option>');
+    addCharacterSelect.append('<option value="">Thêm NPCs</option>');
     skeletonNames.forEach(name => {
         const character = availableCharacters.find(c => c.name === name);
         addCharacterSelect.append(`<option value="${name}">${name} (${character.type})</option>`);
