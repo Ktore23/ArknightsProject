@@ -22,10 +22,11 @@ var hasTriggeredAttack = false;
 var isDying = {};
 var idleTime = {};
 var isInRelaxState = {};
-var randomAnimationTimer = {};
 var isPlayingRandomAnimation = {};
 var attackSequence = {};
 var isMouseHeld = false;
+
+var moveStates = {}; // { isMoving: boolean, moveTime: number, stopTime: number, waitForAnimationEnd: boolean }
 
 const ATTACK_TIMEOUT = 5000;
 
@@ -72,25 +73,96 @@ export function addCharacter(name) {
     }
 
     try {
-        const skeleton = loadSkeleton(name, "Idle", false, "default", skeletonData);
-        if (skeleton) {
-            const index = Object.keys(skeletons).length;
-            skeletons[name] = skeleton;
-            skeletons[name].skeleton.x = (canvas.width / 4) * (index + 0.5);
-            skeletons[name].skeleton.y = canvas.height / 2;
-            if (name !== $("#playerCharacter").val()) {
-                velocities[name] = { vx: 0, vy: 0 };
-                lastAnimation[name] = "Idle";
-                health[name] = 50;
-                isDying[name] = false;
-                idleTime[name] = 0;
-                isInRelaxState[name] = false;
-                isInAttackState[name] = false;
-                isPlayingRandomAnimation[name] = false;
-                attackSequence[name] = { stage: null };
-            }
-            return true;
+        const isOperator = character.type === "operator";
+        const initialAnimation = isOperator ? "Relax" : "Idle";
+        const skelPathToUse = isOperator && character.altSkelPath ? character.altSkelPath : character.skelPath;
+        const atlasPathToUse = isOperator && character.altAtlasPath ? character.altAtlasPath : character.atlasPath;
+
+        const skeleton = loadSkeleton(name, initialAnimation, false, "default", skeletonData, skelPathToUse, atlasPathToUse);
+        if (!skeleton) {
+            console.error(`Failed to load skeleton for ${name}`);
+            return false;
         }
+
+        skeletons[name] = skeleton;
+
+        if (!canvas.width || !canvas.height || isNaN(canvas.width) || isNaN(canvas.height)) {
+            console.error(`Invalid canvas dimensions for ${name}: width=${canvas.width}, height=${canvas.height}`);
+            return false;
+        }
+        const bounds = skeleton.bounds;
+        if (!bounds || isNaN(bounds.size.x) || isNaN(bounds.size.y)) {
+            console.error(`Invalid bounds for ${name}: size.x=${bounds?.size.x}, size.y=${bounds?.size.y}`);
+            return false;
+        }
+
+        const margin = 50;
+        const maxAttempts = 10;
+        let placed = false;
+        let attempts = 0;
+
+        while (!placed && attempts < maxAttempts) {
+            const minX = margin + bounds.size.x / 2;
+            const maxX = canvas.width - margin - bounds.size.x / 2;
+            const minY = margin + bounds.size.y / 2;
+            const maxY = canvas.height - margin - bounds.size.y / 2;
+
+            skeleton.skeleton.x = minX + Math.random() * (maxX - minX);
+            skeleton.skeleton.y = minY + Math.random() * (maxY - minY);
+
+            let overlap = false;
+            const minDist = 150;
+            for (let otherName in skeletons) {
+                if (otherName !== name) {
+                    const otherSkeleton = skeletons[otherName].skeleton;
+                    const dx = skeleton.skeleton.x - otherSkeleton.x;
+                    const dy = skeleton.skeleton.y - otherSkeleton.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < minDist) {
+                        overlap = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!overlap) {
+                placed = true;
+            }
+            attempts++;
+        }
+
+        if (!placed) {
+            console.warn(`Could not find valid position for ${name} after ${maxAttempts} attempts, placing at default position`);
+            skeleton.skeleton.x = canvas.width / 2;
+            skeleton.skeleton.y = canvas.height / 2;
+        }
+
+        if (isNaN(skeleton.skeleton.x) || isNaN(skeleton.skeleton.y)) {
+            console.error(`Invalid coordinates for ${name}: x=${skeleton.skeleton.x}, y=${skeleton.skeleton.y}`);
+            return false;
+        }
+
+        console.log(`Placed ${name} at x=${skeleton.skeleton.x}, y=${skeleton.skeleton.y}`);
+
+        if (name !== $("#playerCharacter").val()) {
+            velocities[name] = { vx: 0, vy: 0 };
+            lastAnimation[name] = initialAnimation;
+            health[name] = 50;
+            isDying[name] = false;
+            idleTime[name] = 0;
+            isInRelaxState[name] = isOperator;
+            isInAttackState[name] = false;
+            isPlayingRandomAnimation[name] = false;
+            attackSequence[name] = { stage: null };
+            moveStates[name] = { isMoving: $("#autoMoveToggle").is(":checked"), moveTime: 0, stopTime: 0, waitForAnimationEnd: false };
+            if ($("#autoMoveToggle").is(":checked") && moveStates[name].isMoving) {
+                velocities[name].vx = (Math.random() - 0.5) * 150;
+                velocities[name].vy = (Math.random() - 0.5) * 150;
+                console.log(`Initial movement for ${name} on add: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
+            }
+        }
+        console.log(`Successfully added character: ${name} with animation: ${initialAnimation}, isInRelaxState: ${isInRelaxState[name]}`);
+        return true;
     } catch (e) {
         console.error(`Error adding character ${name}:`, e.message);
         document.getElementById("error").textContent += `Error adding character ${name}: ${e.message}. `;
@@ -108,20 +180,52 @@ export function initializeSelectedCharacter() {
     try {
         const character = skeletonData.find(c => c.name === selectedCharacter);
         const initialAnimation = character && character.type === "operator" ? "Relax" : "Move";
-        const skeleton = loadSkeleton(selectedCharacter, initialAnimation, false, "default", skeletonData);
+        const skelPathToUse = character.type === "operator" && character.altSkelPath ? character.altSkelPath : character.skelPath;
+        const atlasPathToUse = character.type === "operator" && character.altAtlasPath ? character.altAtlasPath : character.atlasPath;
+        const skeleton = loadSkeleton(selectedCharacter, initialAnimation, false, "default", skeletonData, skelPathToUse, atlasPathToUse);
         if (skeleton) {
             skeletons[selectedCharacter] = skeleton;
-            skeletons[selectedCharacter].skeleton.x = canvas.width / 2;
-            skeletons[selectedCharacter].skeleton.y = canvas.height / 2;
+            skeleton.skeleton.x = canvas.width / 2;
+            skeleton.skeleton.y = canvas.height / 2;
+
+            let overlap = false;
+            const minDist = 150;
+            for (let otherName in skeletons) {
+                if (otherName !== selectedCharacter) {
+                    const dx = skeleton.skeleton.x - skeletons[otherName].skeleton.x;
+                    const dy = skeleton.skeleton.y - skeletons[otherName].skeleton.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < minDist) {
+                        overlap = true;
+                        break;
+                    }
+                }
+            }
+            if (overlap) {
+                console.warn(`Overlap detected for ${selectedCharacter}, repositioning`);
+                skeleton.skeleton.x += minDist * (Math.random() - 0.5);
+                skeleton.skeleton.y += minDist * (Math.random() - 0.5);
+                const bounds = skeleton.bounds;
+                const margin = 50;
+                skeleton.skeleton.x = Math.max(margin + bounds.size.x / 2, Math.min(canvas.width - margin - bounds.size.x / 2, skeleton.skeleton.x));
+                skeleton.skeleton.y = Math.max(margin + bounds.size.y / 2, Math.min(canvas.height - margin - bounds.size.y / 2, skeleton.skeleton.y));
+            }
+
+            console.log(`Placed ${selectedCharacter} at x=${skeleton.skeleton.x}, y=${skeleton.skeleton.y}`);
+
             lastAnimation[selectedCharacter] = initialAnimation;
             health[selectedCharacter] = 50;
             isDying[selectedCharacter] = false;
             idleTime[selectedCharacter] = 0;
             isInRelaxState[selectedCharacter] = character && character.type === "operator";
             isInAttackState[selectedCharacter] = false;
-            randomAnimationTimer[selectedCharacter] = 0;
             isPlayingRandomAnimation[selectedCharacter] = false;
             attackSequence[selectedCharacter] = { stage: null };
+            moveStates[selectedCharacter] = { isMoving: $("#autoMoveToggle").is(":checked"), moveTime: 0, stopTime: 0, waitForAnimationEnd: false };
+            if ($("#autoMoveToggle").is(":checked") && moveStates[selectedCharacter].isMoving) {
+                velocities[selectedCharacter] = { vx: (Math.random() - 0.5) * 150, vy: (Math.random() - 0.5) * 150 };
+                console.log(`Initial movement for ${selectedCharacter} on init: vx=${velocities[selectedCharacter].vx}, vy=${velocities[selectedCharacter].vy}`);
+            }
             console.log(`Successfully initialized character: ${selectedCharacter} with animation: ${initialAnimation}, isInRelaxState: ${isInRelaxState[selectedCharacter]}`);
             lastFrameTime = Date.now() / 1000;
             requestAnimationFrame(render);
@@ -150,6 +254,12 @@ function init() {
     canvas.height = window.innerHeight;
     hitboxCanvas.width = window.innerWidth;
     hitboxCanvas.height = window.innerHeight;
+
+    if (!canvas.width || !canvas.height || isNaN(canvas.width) || isNaN(canvas.height)) {
+        console.error("Invalid canvas dimensions in init");
+        document.getElementById("error").textContent = "Error: Invalid canvas dimensions";
+        return;
+    }
 
     var config = { alpha: true };
     gl = canvas.getContext("webgl", config) || canvas.getContext("experimental-webgl", config);
@@ -244,6 +354,43 @@ function init() {
             });
         }
     });
+
+    // Thêm sự kiện để xử lý thay đổi trạng thái autoMoveToggle
+    $("#autoMoveToggle").on("change", function () {
+        const isChecked = $(this).is(":checked");
+        console.log(`autoMoveToggle changed to: ${isChecked}`);
+        Object.keys(skeletons).forEach(name => {
+            if (name !== $("#playerCharacter").val() && !isDying[name]) {
+                if (isChecked) {
+                    if (!moveStates[name]) {
+                        moveStates[name] = { isMoving: true, moveTime: 0, stopTime: 0, waitForAnimationEnd: false };
+                    } else {
+                        moveStates[name].isMoving = true;
+                        moveStates[name].moveTime = 0;
+                        moveStates[name].stopTime = 0;
+                        moveStates[name].waitForAnimationEnd = false;
+                    }
+                    velocities[name].vx = (Math.random() - 0.5) * 150;
+                    velocities[name].vy = (Math.random() - 0.5) * 150;
+                    console.log(`autoMoveToggle enabled for ${name}, starting movement: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
+                } else {
+                    velocities[name].vx = 0;
+                    velocities[name].vy = 0;
+                    moveStates[name].isMoving = false;
+                    moveStates[name].moveTime = 0;
+                    moveStates[name].stopTime = 0;
+                    moveStates[name].waitForAnimationEnd = false;
+                    const character = skeletonData.find(c => c.name === name);
+                    const targetAnim = (character && character.type === "operator") ? "Relax" : "Idle";
+                    const animToUse = skeletons[name].skeleton.data.animations.find(anim => anim.name.toLowerCase() === targetAnim.toLowerCase())?.name || skeletons[name].skeleton.data.animations[0]?.name || "Idle";
+                    skeletons[name].state.setAnimation(0, animToUse, true);
+                    lastAnimation[name] = animToUse;
+                    isInRelaxState[name] = animToUse.toLowerCase() === "relax";
+                    console.log(`autoMoveToggle disabled for ${name}, switched to ${animToUse}`);
+                }
+            }
+        });
+    });
 }
 
 function checkAllAssetsLoaded() {
@@ -272,9 +419,9 @@ function checkAllAssetsLoaded() {
                 hasTriggeredAttack = false;
                 isAttacking = false;
                 attackHitboxes = [];
-                randomAnimationTimer = {};
                 isPlayingRandomAnimation = {};
                 attackSequence = {};
+                moveStates = {};
                 initializeSelectedCharacter();
             });
         });
@@ -303,7 +450,8 @@ function createAnimationListener(name) {
             if (track.animation.name.toLowerCase() === "relax" || track.animation.name.toLowerCase() === "idle") {
                 isInRelaxState[name] = true;
                 isPlayingRandomAnimation[name] = false;
-                console.log(`${name} - Entered Relax/Idle state, isInRelaxState: ${isInRelaxState[name]}, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
+                moveStates[name].waitForAnimationEnd = true;
+                console.log(`${name} - Entered Relax/Idle state, isInRelaxState: ${isInRelaxState[name]}, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}, waitForAnimationEnd: ${moveStates[name].waitForAnimationEnd}`);
             }
         },
         interrupt: function (track) { console.log("Animation on track " + track.trackIndex + " interrupted"); },
@@ -316,18 +464,36 @@ function createAnimationListener(name) {
                 const character = skeletonData.find(c => c.name === name);
                 if (character && character.type === "operator") {
                     if (!isInAttackState[name] && !isDying[name] && (!velocities[name] || (velocities[name].vx === 0 && velocities[name].vy === 0))) {
-                        if (isPlayingRandomAnimation[name]) {
+                        if (track.animation.name.toLowerCase() === "relax" && !isPlayingRandomAnimation[name]) {
+                            const availableAnimations = target.skeleton.data.animations
+                                .filter(anim => !["default", "relax", "move"].includes(anim.name.toLowerCase()))
+                                .map(anim => anim.name);
+                            console.log(`${name} - Available animations for random selection: ${availableAnimations.join(", ")}`);
+                            if (availableAnimations.length > 0) {
+                                const randomAnim = availableAnimations[Math.floor(Math.random() * availableAnimations.length)];
+                                target.state.setAnimation(0, randomAnim, false);
+                                lastAnimation[name] = randomAnim;
+                                isInRelaxState[name] = false;
+                                isPlayingRandomAnimation[name] = true;
+                                console.log(`${name} - Switched to random animation: ${randomAnim} after completing Relax, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
+                            } else {
+                                console.warn(`${name} - No valid animations available for random selection, staying in Relax`);
+                                const relaxAnim = target.skeleton.data.animations.find(anim => anim.name.toLowerCase() === "relax")?.name || "Idle";
+                                target.state.setAnimation(0, relaxAnim, true);
+                                lastAnimation[name] = relaxAnim;
+                                isInRelaxState[name] = relaxAnim.toLowerCase() === "relax";
+                                isPlayingRandomAnimation[name] = false;
+                            }
+                        } else if (isPlayingRandomAnimation[name]) {
                             const relaxAnim = target.skeleton.data.animations.find(anim => anim.name.toLowerCase() === "relax")?.name || "Idle";
                             target.state.setAnimation(0, relaxAnim, true);
                             lastAnimation[name] = relaxAnim;
                             isInRelaxState[name] = relaxAnim.toLowerCase() === "relax";
                             isPlayingRandomAnimation[name] = false;
-                            randomAnimationTimer[name] = 0;
                             console.log(`${name} - Returned to ${relaxAnim} after completing random animation ${track.animation.name}, isInRelaxState: ${isInRelaxState[name]}, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
                         }
                     }
                 }
-
                 if (track.animation.name.toLowerCase() === "attack_pre") {
                     attackSequence[name].stage = "attack";
                     const attackAnim = target.skeleton.data.animations.find(anim => anim.name.toLowerCase() === "attack")?.name;
@@ -360,9 +526,17 @@ function createAnimationListener(name) {
                 delete isInAttackState[name];
                 delete isPlayingRandomAnimation[name];
                 delete attackSequence[name];
+                delete moveStates[name];
                 if (Object.keys(skeletons).length === 0) {
                     $("#playerCharacter").trigger("change");
                 }
+            } else if ((track.animation.name.toLowerCase() === "idle" || track.animation.name.toLowerCase() === "relax") && moveStates[name].waitForAnimationEnd) {
+                moveStates[name].isMoving = true;
+                moveStates[name].moveTime = 0;
+                moveStates[name].waitForAnimationEnd = false;
+                velocities[name].vx = (Math.random() - 0.5) * 150;
+                velocities[name].vy = (Math.random() - 0.5) * 150;
+                console.log(`Animation ${track.animation.name} completed for ${name}, resumed movement: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
             }
         },
         event: function (track, event) {
@@ -399,23 +573,35 @@ function createAnimationListener(name) {
                                         console.log(`${hitbox.name} đã hết máu, kiểm tra animation Die`);
                                         const targetSkeleton = skeletons[hitbox.name];
                                         if (targetSkeleton) {
+                                            const character = skeletonData.find(c => c.name === hitbox.name);
+                                            const isOperator = character && character.type === "operator";
                                             const { state, skeleton } = targetSkeleton;
-                                            const dieAnimation = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "die")?.name;
-                                            if (dieAnimation) {
-                                                console.log(`Chuyển ${hitbox.name} sang animation Die`);
-                                                state.setAnimation(0, dieAnimation, false);
+
+                                            if (isOperator && character.skelPath && character.atlasPath) {
+                                                console.log(`Switching ${hitbox.name} to skelPath to play Die animation`);
+                                                switchSkeletonFile(hitbox.name, character.skelPath, character.atlasPath, "Die", (success) => {
+                                                    if (success) {
+                                                        const dieAnimation = skeletons[hitbox.name].skeleton.data.animations.find(anim => anim.name.toLowerCase() === "die")?.name;
+                                                        if (dieAnimation) {
+                                                            console.log(`Chuyển ${hitbox.name} sang animation Die sau khi chuyển skeleton`);
+                                                            skeletons[hitbox.name].state.setAnimation(0, dieAnimation, false);
+                                                        } else {
+                                                            console.warn(`No Die animation found in skelPath for ${hitbox.name}, removing immediately`);
+                                                            removeCharacter(hitbox.name);
+                                                        }
+                                                    } else {
+                                                        console.error(`Failed to switch to skelPath for ${hitbox.name}, removing immediately`);
+                                                        removeCharacter(hitbox.name);
+                                                    }
+                                                });
                                             } else {
-                                                console.warn(`No Die animation for ${hitbox.name}, removing immediately`);
-                                                delete skeletons[hitbox.name];
-                                                delete velocities[hitbox.name];
-                                                delete health[hitbox.name];
-                                                delete isDying[hitbox.name];
-                                                delete attackStartTime[hitbox.name];
-                                                delete isInAttackState[hitbox.name];
-                                                delete isPlayingRandomAnimation[hitbox.name];
-                                                delete attackSequence[hitbox.name];
-                                                if (Object.keys(skeletons).length === 0) {
-                                                    $("#playerCharacter").trigger("change");
+                                                const dieAnimation = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "die")?.name;
+                                                if (dieAnimation) {
+                                                    console.log(`Chuyển ${hitbox.name} sang animation Die`);
+                                                    state.setAnimation(0, dieAnimation, false);
+                                                } else {
+                                                    console.warn(`No Die animation for ${hitbox.name}, removing immediately`);
+                                                    removeCharacter(hitbox.name);
                                                 }
                                             }
                                         } else {
@@ -431,6 +617,22 @@ function createAnimationListener(name) {
             }
         }
     };
+}
+
+function removeCharacter(name) {
+    delete skeletons[name];
+    delete velocities[name];
+    delete health[name];
+    delete isDying[name];
+    delete isInRelaxState[name];
+    delete attackStartTime[name];
+    delete isInAttackState[name];
+    delete isPlayingRandomAnimation[name];
+    delete attackSequence[name];
+    delete moveStates[name];
+    if (Object.keys(skeletons).length === 0) {
+        $("#playerCharacter").trigger("change");
+    }
 }
 
 function endAttackSequence(name, target, character) {
@@ -467,7 +669,7 @@ function endAttackSequence(name, target, character) {
     }
 }
 
-function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
+function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data, skelPath, atlasPath) {
     if (skin === undefined) skin = "default";
 
     const character = data.find(c => c.name === name);
@@ -477,8 +679,8 @@ function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
     }
 
     const isOperator = character.type === "operator";
-    const skelPathToUse = isOperator && character.altSkelPath ? character.altSkelPath : character.skelPath;
-    const atlasPathToUse = isOperator && character.altAtlasPath ? character.altAtlasPath : character.atlasPath;
+    const skelPathToUse = skelPath || (isOperator && character.altSkelPath ? character.altSkelPath : character.skelPath);
+    const atlasPathToUse = atlasPath || (isOperator && character.altAtlasPath ? character.altAtlasPath : character.atlasPath);
 
     let atlas = null;
     try {
@@ -511,11 +713,11 @@ function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
         }
 
         if (!skeletonDataLocal.bones || !skeletonDataLocal.bones.length || !skeletonDataLocal.slots.length || !skeletonDataLocal.skins.length) {
-            console.error("Invalid skeleton data: No bones, slots, or skins");
+            console.error(`Invalid skeleton data for ${name}: No bones, slots, or skins`);
             return null;
         }
         if (!skeletonDataLocal.animations || !skeletonDataLocal.animations.length) {
-            console.error("No animations found in skeleton data");
+            console.error(`No animations found in skeleton data for ${name}`);
             return null;
         }
     } catch (e) {
@@ -526,6 +728,11 @@ function loadSkeleton(name, initialAnimation, premultipliedAlpha, skin, data) {
     const skeleton = new spine.Skeleton(skeletonDataLocal);
     skeleton.setSkinByName(skin);
     const bounds = calculateSetupPoseBounds(skeleton);
+
+    if (!bounds || isNaN(bounds.size.x) || isNaN(bounds.size.y)) {
+        console.error(`Invalid bounds for ${name}: size.x=${bounds?.size.x}, size.y=${bounds?.size.y}`);
+        return null;
+    }
 
     const animationStateData = new spine.AnimationStateData(skeleton.data);
     const animationState = new spine.AnimationState(animationStateData);
@@ -580,71 +787,76 @@ function switchSkeletonFile(name, newSkelPath, newAtlasPath, initialAnimation, c
         skelData = assetManager.get(newSkelPath);
         atlasData = assetManager.get(newAtlasPath);
         if (skelData && atlasData && assetManager.isLoadingComplete()) {
-            const atlas = atlasData;
-            if (!atlas) {
-                console.error(`Atlas not loaded for ${newAtlasPath}`);
+            try {
+                const atlas = atlasData;
+                if (!atlas) {
+                    console.error(`Atlas not loaded for ${newAtlasPath}`);
+                    if (callback) callback(false);
+                    return;
+                }
+                const atlasLoader = new spine.AtlasAttachmentLoader(atlas);
+                const skeletonBinary = new spine.SkeletonBinary(atlasLoader);
+                skeletonBinary.scale = 0.5;
+
+                const binaryData = skelData;
+                if (!binaryData) {
+                    console.error(`Skeleton binary not loaded for ${newSkelPath}`);
+                    if (callback) callback(false);
+                    return;
+                }
+                const newSkeletonData = skeletonBinary.readSkeletonData(binaryData);
+                if (!newSkeletonData) {
+                    console.error(`Failed to parse skeleton data from ${newSkelPath}`);
+                    if (callback) callback(false);
+                    return;
+                }
+
+                const oldSkeleton = skeletons[name].skeleton;
+                const oldX = oldSkeleton.x;
+                const oldY = oldSkeleton.y;
+                const oldScaleX = oldSkeleton.scaleX;
+                const oldScaleY = oldSkeleton.scaleY;
+
+                const newSkeleton = new spine.Skeleton(newSkeletonData);
+                newSkeleton.setSkinByName("default");
+                newSkeleton.x = oldX;
+                newSkeleton.y = oldY;
+                newSkeleton.scaleX = oldScaleX;
+                newSkeleton.scaleY = oldScaleY;
+                newSkeleton.setToSetupPose();
+
+                const animationStateData = new spine.AnimationStateData(newSkeletonData);
+                const animationState = new spine.AnimationState(animationStateData);
+                const animationToUse = newSkeletonData.animations.find(anim => anim.name.toLowerCase() === initialAnimation.toLowerCase())?.name || newSkeletonData.animations[0]?.name;
+                if (!animationToUse) {
+                    console.error(`No valid animation found in ${newSkelPath} for ${initialAnimation}`);
+                    if (callback) callback(false);
+                    return;
+                }
+                console.log(`Setting animation ${animationToUse} for ${name} with loop: ${initialAnimation.toLowerCase() !== "attack"}`);
+                animationState.setAnimation(0, animationToUse, initialAnimation.toLowerCase() !== "attack");
+
+                animationState.addListener(createAnimationListener(name));
+
+                if (name === $("#playerCharacter").val()) {
+                    isAttacking = false;
+                    isInAttackState[name] = false;
+                    attackHitboxes = [];
+                    delete attackStartTime[name];
+                    lastAnimation[name] = animationToUse;
+                    isPlayingRandomAnimation[name] = false;
+                    isInRelaxState[name] = animationToUse.toLowerCase() === "relax" || animationToUse.toLowerCase() === "idle";
+                    attackSequence[name] = { stage: null };
+                    console.log(`After switching skeleton file for ${name}, set isInRelaxState: ${isInRelaxState[name]}, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
+                }
+
+                skeletons[name] = { skeleton: newSkeleton, state: animationState, bounds: calculateSetupPoseBounds(newSkeleton), premultipliedAlpha: skeletons[name]?.premultipliedAlpha || false };
+                console.log(`Successfully switched ${name} to new skeleton file: ${newSkelPath} with animation ${animationState.tracks[0]?.animation?.name}`);
+                if (callback) callback(true);
+            } catch (e) {
+                console.error(`Error switching skeleton file for ${name}: ${e.message}`);
                 if (callback) callback(false);
-                return;
             }
-            const atlasLoader = new spine.AtlasAttachmentLoader(atlas);
-            const skeletonBinary = new spine.SkeletonBinary(atlasLoader);
-            skeletonBinary.scale = 0.5;
-
-            const binaryData = skelData;
-            if (!binaryData) {
-                console.error(`Skeleton binary not loaded for ${newSkelPath}`);
-                if (callback) callback(false);
-                return;
-            }
-            const newSkeletonData = skeletonBinary.readSkeletonData(binaryData);
-            if (!newSkeletonData) {
-                console.error(`Failed to parse skeleton data from ${newSkelPath}`);
-                if (callback) callback(false);
-                return;
-            }
-
-            const oldSkeleton = skeletons[name].skeleton;
-            const oldX = oldSkeleton.x;
-            const oldY = oldSkeleton.y;
-            const oldScaleX = oldSkeleton.scaleX;
-            const oldScaleY = oldSkeleton.scaleY;
-
-            const newSkeleton = new spine.Skeleton(newSkeletonData);
-            newSkeleton.setSkinByName("default");
-            newSkeleton.x = oldX;
-            newSkeleton.y = oldY;
-            newSkeleton.scaleX = oldScaleX;
-            newSkeleton.scaleY = oldScaleY;
-            newSkeleton.setToSetupPose();
-
-            const animationStateData = new spine.AnimationStateData(newSkeletonData);
-            const animationState = new spine.AnimationState(animationStateData);
-            const animationToUse = newSkeletonData.animations.find(anim => anim.name.toLowerCase() === initialAnimation.toLowerCase())?.name || newSkeletonData.animations[0]?.name;
-            if (!animationToUse) {
-                console.error(`No valid animation found in ${newSkelPath} for ${initialAnimation}`);
-                if (callback) callback(false);
-                return;
-            }
-            console.log(`Setting animation ${animationToUse} for ${name} with loop: ${initialAnimation.toLowerCase() !== "attack"}`);
-            animationState.setAnimation(0, animationToUse, initialAnimation.toLowerCase() !== "attack");
-
-            animationState.addListener(createAnimationListener(name));
-
-            if (name === $("#playerCharacter").val()) {
-                isAttacking = false;
-                isInAttackState[name] = false;
-                attackHitboxes = [];
-                delete attackStartTime[name];
-                lastAnimation[name] = animationToUse;
-                isPlayingRandomAnimation[name] = false;
-                isInRelaxState[name] = animationToUse.toLowerCase() === "relax" || animationToUse.toLowerCase() === "idle";
-                attackSequence[name] = { stage: null };
-                console.log(`After switching skeleton file for ${name}, set isInRelaxState: ${isInRelaxState[name]}, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
-            }
-
-            skeletons[name] = { skeleton: newSkeleton, state: animationState, bounds: calculateSetupPoseBounds(newSkeleton), premultipliedAlpha: skeletons[name]?.premultipliedAlpha || false };
-            console.log(`Successfully switched ${name} to new skeleton file: ${newSkelPath} with animation ${animationState.tracks[0]?.animation?.name}`);
-            if (callback) callback(true);
         } else {
             console.warn(`Assets for ${newSkelPath} not yet loaded, retrying... (attempt ${retryCount + 1}/${maxRetries})`);
             retryCount++;
@@ -664,7 +876,7 @@ function render() {
     }
 
     var now = Date.now() / 1000;
-    var delta = now - lastFrameTime;
+    var delta = Math.min(0.1, now - lastFrameTime);
     lastFrameTime = now;
 
     resize();
@@ -692,10 +904,6 @@ function render() {
     })).sort((a, b) => b.y - a.y);
 
     hitboxCtx.clearRect(0, 0, hitboxCanvas.width, hitboxCanvas.height);
-    if (showHitbox) {
-        hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)";
-        hitboxCtx.lineWidth = 2;
-    }
 
     const hitboxes = [];
     attackHitboxes = [];
@@ -716,12 +924,18 @@ function render() {
             endAttackSequence(name, target, character);
         }
 
+        if (isNaN(skeleton.x) || isNaN(skeleton.y)) {
+            console.error(`Invalid coordinates for ${name}: x=${skeleton.x}, y=${skeleton.y}, skipping hitbox`);
+            return;
+        }
+
         const baseRadius = 50;
         const current = { name, x: skeleton.x, y: skeleton.y, radius: baseRadius, skeleton };
         hitboxes.push(current);
 
         if (name === $("#playerCharacter").val()) {
             let vx = 0, vy = 0, speed = 100;
+            const margin = 50;
             if (!isInAttackState[name] && !isDying[name]) {
                 if (keys['ArrowLeft'] || keys['KeyA']) { vx = -speed; skeleton.scaleX = -1; }
                 if (keys['ArrowRight'] || keys['KeyD']) { vx = speed; skeleton.scaleX = 1; }
@@ -731,7 +945,6 @@ function render() {
                 skeleton.x += vx * delta;
                 skeleton.y += vy * delta;
 
-                const margin = 0;
                 skeleton.x = Math.max(margin + bounds.size.x / 2, Math.min(canvas.width - margin - bounds.size.x / 2, skeleton.x));
                 skeleton.y = Math.max(margin + bounds.size.y / 2, Math.min(canvas.height - margin - bounds.size.y / 2, skeleton.y));
 
@@ -745,44 +958,16 @@ function render() {
                                 state.setAnimation(0, targetAnim, true);
                                 lastAnimation[name] = targetAnim;
                                 isInRelaxState[name] = targetAnim.toLowerCase() === "relax";
-                                randomAnimationTimer[name] = 0;
                                 console.log(`${name} - Switched to animation: ${targetAnim}, isInRelaxState: ${isInRelaxState[name]}, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
                             }
                         }
-
                         if (vx === 0 && vy === 0) {
                             idleTime[name] += delta;
                             if (isInRelaxState[name]) {
-                                randomAnimationTimer[name] += delta;
-                                console.log(`${name} - Idle time: ${idleTime[name]}s, Random animation timer: ${randomAnimationTimer[name]}s, isInRelaxState: ${isInRelaxState[name]}, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
-                                if (randomAnimationTimer[name] >= 5 && isInRelaxState[name] && !isPlayingRandomAnimation[name]) {
-                                    const availableAnimations = skeleton.data.animations
-                                        .filter(anim => !["default", "relax", "move"].includes(anim.name.toLowerCase()))
-                                        .map(anim => anim.name);
-                                    console.log(`${name} - Available animations for random selection: ${availableAnimations.join(", ")}`);
-                                    if (availableAnimations.length > 0) {
-                                        const randomAnim = availableAnimations[Math.floor(Math.random() * availableAnimations.length)];
-                                        state.setAnimation(0, randomAnim, false);
-                                        lastAnimation[name] = randomAnim;
-                                        isInRelaxState[name] = false;
-                                        isPlayingRandomAnimation[name] = true;
-                                        randomAnimationTimer[name] = 0;
-                                        console.log(`${name} - Switched to random animation: ${randomAnim} after 5 seconds, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
-                                    } else {
-                                        console.warn(`${name} - No valid animations available for random selection, staying in Relax`);
-                                    }
-                                } else if (randomAnimationTimer[name] >= 5 && !isInRelaxState[name] && !isPlayingRandomAnimation[name]) {
-                                    console.warn(`${name} - Not in Relax state after 5 seconds, forcing Relax animation`);
-                                    state.setAnimation(0, "Relax", true);
-                                    lastAnimation[name] = "Relax";
-                                    isInRelaxState[name] = true;
-                                    isPlayingRandomAnimation[name] = false;
-                                    randomAnimationTimer[name] = 0;
-                                }
+                                console.log(`${name} - In Relax state, waiting for Relax animation to complete, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
                             }
                         } else {
                             idleTime[name] = 0;
-                            randomAnimationTimer[name] = 0;
                             isPlayingRandomAnimation[name] = false;
                             console.log(`${name} - Moving, resetting timers, isPlayingRandomAnimation: ${isPlayingRandomAnimation[name]}`);
                         }
@@ -791,7 +976,7 @@ function render() {
                         if (lastAnimation[name] !== targetAnim) {
                             state.setAnimation(0, targetAnim, true);
                             lastAnimation[name] = targetAnim;
-                            console.log("Switched to animation: " + targetAnim);
+                            console.log(`Switched to animation: ${targetAnim}`);
                         }
                     }
                 }
@@ -918,62 +1103,97 @@ function render() {
         } else {
             if (!isDying[name]) {
                 if ($("#autoMoveToggle").is(":checked")) {
-                    if (velocities[name].vx === 0 && velocities[name].vy === 0) {
-                        velocities[name].vx = (Math.random() - 0.5) * 200;
-                        velocities[name].vy = (Math.random() - 0.5) * 200;
-                        console.log(`Initialized velocity for ${name}: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
+                    const character = skeletonData.find(c => c.name === name);
+                    const targetAnimMove = "Move";
+                    const targetAnimIdle = (character && character.type === "operator") ? "Relax" : "Idle";
+                    const animToUseIdle = skeleton.data.animations.find(anim => anim.name.toLowerCase() === targetAnimIdle.toLowerCase())?.name || skeleton.data.animations[0]?.name || "Idle";
+
+                    if (!moveStates[name]) {
+                        moveStates[name] = { isMoving: true, moveTime: 0, stopTime: 0, waitForAnimationEnd: false };
+                        velocities[name].vx = (Math.random() - 0.5) * 150;
+                        velocities[name].vy = (Math.random() - 0.5) * 150;
+                        console.log(`Initialized moveStates for ${name} with movement: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
                     }
 
-                    skeleton.x += velocities[name].vx * delta;
-                    skeleton.y += velocities[name].vy * delta;
+                    const moveState = moveStates[name];
 
-                    if (velocities[name].vx > 0) skeleton.scaleX = 1;
-                    else if (velocities[name].vx < 0) skeleton.scaleX = -1;
+                    if (moveState.isMoving) {
+                        moveState.moveTime += delta;
+                        const maxMoveDuration = 5 + Math.random() * 5; // thời gian ngẫu nhiên
 
-                    const margin = 0;
-                    if (skeleton.x < margin + bounds.size.x / 2 || skeleton.x > canvas.width - margin - bounds.size.x / 2)
-                        velocities[name].vx *= -1;
-                    if (skeleton.y < margin + bounds.size.y / 2 || skeleton.y > canvas.height - margin - bounds.size.y / 2)
-                        velocities[name].vy *= -1;
+                        if (moveState.moveTime >= maxMoveDuration) {
+                            moveState.isMoving = false;
+                            moveState.moveTime = 0;
+                            moveState.waitForAnimationEnd = true;
+                            velocities[name].vx = 0;
+                            velocities[name].vy = 0;
+                            if (currentAnimation.toLowerCase() !== animToUseIdle.toLowerCase()) {
+                                state.setAnimation(0, animToUseIdle, true);
+                                lastAnimation[name] = animToUseIdle;
+                                isInRelaxState[name] = animToUseIdle.toLowerCase() === "relax";
+                                console.log(`Switched ${name} to ${animToUseIdle} after moving, waiting for animation end`);
+                            }
+                        } else {
+                            if (Math.random() < 0.01) {
+                                velocities[name].vx = (Math.random() - 0.5) * 150;
+                                velocities[name].vy = (Math.random() - 0.5) * 150;
+                                console.log(`Random velocity change for ${name}: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
+                            }
 
-                    if (currentAnimation !== "Move") {
-                        state.setAnimation(0, "Move", true);
-                        lastAnimation[name] = "Move";
-                        console.log(`Switched ${name} to Move animation due to auto movement`);
+                            const margin = 50;
+                            const prevX = skeleton.x;
+                            const prevY = skeleton.y;
+                            skeleton.x += velocities[name].vx * delta;
+                            skeleton.y += velocities[name].vy * delta;
+
+                            skeleton.x = Math.max(margin + bounds.size.x / 2, Math.min(canvas.width - margin - bounds.size.x / 2, skeleton.x));
+                            skeleton.y = Math.max(margin + bounds.size.y / 2, Math.min(canvas.height - margin - bounds.size.y / 2, skeleton.y));
+
+                            if (skeleton.x === margin + bounds.size.x / 2 && prevX < skeleton.x) velocities[name].vx = -Math.abs(velocities[name].vx);
+                            if (skeleton.x === canvas.width - margin - bounds.size.x / 2 && prevX > skeleton.x) velocities[name].vx = Math.abs(velocities[name].vx);
+                            if (skeleton.y === margin + bounds.size.y / 2 && prevY < skeleton.y) velocities[name].vy = -Math.abs(velocities[name].vy);
+                            if (skeleton.y === canvas.height - margin - bounds.size.y / 2 && prevY > skeleton.y) velocities[name].vy = Math.abs(velocities[name].vy);
+
+                            if (velocities[name].vx > 0) skeleton.scaleX = 1;
+                            else if (velocities[name].vx < 0) skeleton.scaleX = -1;
+
+                            if (currentAnimation.toLowerCase() !== targetAnimMove.toLowerCase()) {
+                                state.setAnimation(0, targetAnimMove, true);
+                                lastAnimation[name] = targetAnimMove;
+                                isInRelaxState[name] = false;
+                                console.log(`Switched ${name} to Move animation due to auto movement`);
+                            }
+                        }
+                    } else if (moveState.waitForAnimationEnd) {
+                        console.log(`${name} - Waiting for ${currentAnimation} to complete before resuming movement`);
+                    } else {
+                        moveState.isMoving = true;
+                        moveState.moveTime = 0;
+                        velocities[name].vx = (Math.random() - 0.5) * 150;
+                        velocities[name].vy = (Math.random() - 0.5) * 150;
+                        console.log(`Restarted movement for ${name} after idle: vx=${velocities[name].vx}, vy=${velocities[name].vy}`);
+                    }
+
+                    if (velocities[name].vx === 0 && velocities[name].vy === 0) {
+                        idleTime[name] += delta;
+                        console.log(`Idle time for ${name} (other): ${idleTime[name]}s`);
+                    } else {
+                        idleTime[name] = 0;
                     }
                 } else {
                     velocities[name].vx = 0;
                     velocities[name].vy = 0;
-                    if (currentAnimation !== "Idle") {
-                        const idleAnim = skeleton.data.animations.find(anim => anim.name.toLowerCase() === "idle")?.name || skeleton.data.animations[0]?.name || "Idle";
-                        state.setAnimation(0, idleAnim, true);
-                        lastAnimation[name] = idleAnim;
-                        console.log(`Switched ${name} to Idle animation due to auto movement being off`);
+                    const character = skeletonData.find(c => c.name === name);
+                    const targetAnim = (character && character.type === "operator") ? "Relax" : "Idle";
+                    const animToUse = skeleton.data.animations.find(anim => anim.name.toLowerCase() === targetAnim.toLowerCase())?.name || skeleton.data.animations[0]?.name || "Idle";
+                    if (currentAnimation.toLowerCase() !== animToUse.toLowerCase()) {
+                        state.setAnimation(0, animToUse, true);
+                        lastAnimation[name] = animToUse;
+                        isInRelaxState[name] = animToUse.toLowerCase() === "relax";
+                        console.log(`Switched ${name} to ${animToUse} animation due to auto movement being off, isInRelaxState: ${isInRelaxState[name]}`);
                     }
-                }
-
-                if (velocities[name].vx === 0 && velocities[name].vy === 0) {
                     idleTime[name] += delta;
                     console.log(`Idle time for ${name} (other): ${idleTime[name]}s`);
-                    if (idleTime[name] >= 5) {
-                        let character;
-                        if (Array.isArray(skeletonData)) {
-                            character = skeletonData.find(c => c.name === name);
-                        } else {
-                            console.warn(`skeletonData is not an array for ${name}, skipping character lookup`);
-                            character = null;
-                        }
-                        if (character && character.type === "operator" && character.altSkelPath && character.altAtlasPath) {
-                            switchSkeletonFile(name, character.altSkelPath, character.altAtlasPath, "Relax", () => {
-                                console.log(`Switched ${name} to Relax`);
-                            });
-                            isInRelaxState[name] = true;
-                            idleTime[name] = 0;
-                            console.log(`Switched to Relax for ${name} using altSkelPath`);
-                        }
-                    }
-                } else {
-                    idleTime[name] = 0;
                 }
             }
         }
@@ -990,16 +1210,24 @@ function render() {
         skeletonRenderer.draw(batcher, skeleton);
     });
 
-    if (showHitbox) {
-        hitboxes.forEach((hitboxA, indexA) => {
-            hitboxes.forEach((hitboxB, indexB) => {
-                if (indexA === indexB) return;
-                const dx = hitboxB.x - hitboxA.x;
-                const dy = hitboxB.y - hitboxA.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                const minDist = hitboxA.radius + hitboxB.radius;
+    hitboxes.forEach((hitboxA, indexA) => {
+        hitboxes.forEach((hitboxB, indexB) => {
+            if (indexA === indexB) return;
+            if (!skeletons[hitboxA.name] || !skeletons[hitboxB.name]) {
+                console.warn(`Skeleton missing for ${hitboxA.name} or ${hitboxB.name}, skipping collision check`);
+                return;
+            }
+            if (isNaN(hitboxA.x) || isNaN(hitboxA.y) || isNaN(hitboxB.x) || isNaN(hitboxB.y)) {
+                console.warn(`Invalid coordinates for collision check: ${hitboxA.name} (x=${hitboxA.x}, y=${hitboxA.y}), ${hitboxB.name} (x=${hitboxB.x}, y=${hitboxB.y})`);
+                return;
+            }
+            const dx = hitboxB.x - hitboxA.x;
+            const dy = hitboxB.y - hitboxA.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const minDist = hitboxA.radius + hitboxB.radius;
 
-                if (dist < minDist) {
+            if (dist < minDist) {
+                if (dist > 0) {
                     const overlap = minDist - dist;
                     const adjustX = (overlap * dx / dist) / 2;
                     const adjustY = (overlap * dy / dist) / 2;
@@ -1010,13 +1238,39 @@ function render() {
                     skeletons[hitboxB.name].skeleton.y += adjustY;
 
                     console.log(`Collision detected between ${hitboxA.name} and ${hitboxB.name}, adjusted positions`);
-                }
-            });
-        });
+                } else {
+                    console.warn(`Characters ${hitboxA.name} and ${hitboxB.name} are overlapping at the same position, separating them`);
+                    const separationDistance = minDist / 2;
+                    const adjustX = separationDistance * (Math.random() - 0.5);
+                    const adjustY = separationDistance * (Math.random() - 0.5);
 
+                    skeletons[hitboxA.name].skeleton.x -= adjustX;
+                    skeletons[hitboxA.name].skeleton.y -= adjustY;
+                    skeletons[hitboxB.name].skeleton.x += adjustX;
+                    skeletons[hitboxB.name].skeleton.y += adjustY;
+
+                    const boundsA = skeletons[hitboxA.name].bounds;
+                    const boundsB = skeletons[hitboxB.name].bounds;
+                    const margin = 50;
+                    skeletons[hitboxA.name].skeleton.x = Math.max(margin + boundsA.size.x / 2, Math.min(canvas.width - margin - boundsA.size.x / 2, skeletons[hitboxA.name].skeleton.x));
+                    skeletons[hitboxA.name].skeleton.y = Math.max(margin + boundsA.size.y / 2, Math.min(canvas.height - margin - boundsA.size.y / 2, skeletons[hitboxA.name].skeleton.y));
+                    skeletons[hitboxB.name].skeleton.x = Math.max(margin + boundsB.size.x / 2, Math.min(canvas.width - margin - boundsB.size.x / 2, skeletons[hitboxB.name].skeleton.x));
+                    skeletons[hitboxB.name].skeleton.y = Math.max(margin + boundsB.size.y / 2, Math.min(canvas.height - margin - boundsB.size.y / 2, skeletons[hitboxB.name].skeleton.y));
+
+                    console.log(`Separated ${hitboxA.name} to x=${skeletons[hitboxA.name].skeleton.x}, y=${skeletons[hitboxA.name].skeleton.y} and ${hitboxB.name} to x=${skeletons[hitboxB.name].skeleton.x}, y=${skeletons[hitboxB.name].skeleton.y}`);
+                }
+            }
+        });
+    });
+
+    if (showHitbox) {
         hitboxCtx.strokeStyle = "rgba(255, 0, 0, 0.8)";
         hitboxCtx.lineWidth = 2;
         hitboxes.forEach(hitbox => {
+            if (isNaN(hitbox.x) || isNaN(hitbox.y)) {
+                console.warn(`Skipping draw hitbox for ${hitbox.name} due to invalid coordinates: x=${hitbox.x}, y=${hitbox.y}`);
+                return;
+            }
             hitboxCtx.beginPath();
             hitboxCtx.arc(hitbox.x, canvas.height - hitbox.y, hitbox.radius, 0, 2 * Math.PI);
             hitboxCtx.stroke();
@@ -1026,6 +1280,10 @@ function render() {
 
     if (showHealthBar) {
         hitboxes.forEach(hitbox => {
+            if (isNaN(hitbox.x) || isNaN(hitbox.y)) {
+                console.warn(`Skipping draw health bar for ${hitbox.name} due to invalid coordinates: x=${hitbox.x}, y=${hitbox.y}`);
+                return;
+            }
             if (health[hitbox.name] > 0) {
                 const healthWidth = 50;
                 const healthHeight = 5;
