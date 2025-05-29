@@ -34,6 +34,30 @@ function setupUI() {
         playerCharacterSelect.append(`<option value="${name}">${name} (${character.type})</option>`);
     });
 
+    // Ngăn chặn sự kiện bàn phím trên dropdown để tránh chọn nhân vật không mong muốn
+    playerCharacterSelect.on('keydown keypress', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        console.log(`Prevented key ${event.key} on playerCharacter dropdown`);
+    });
+
+    // Xử lý sự kiện change và bỏ focus sau khi chọn
+    playerCharacterSelect.off('change').on('change', function() {
+        const selectedCharacter = $(this).val();
+        if (selectedCharacter) {
+            // Gọi initializeSelectedCharacter từ render.js
+            const renderModule = window.render || {};
+            if (renderModule.initializeSelectedCharacter) {
+                renderModule.initializeSelectedCharacter();
+            } else {
+                console.warn("initializeSelectedCharacter not found in render module");
+            }
+            // Bỏ focus khỏi dropdown
+            $(this).blur();
+            console.log(`Blurred playerCharacter dropdown after selecting ${selectedCharacter}`);
+        }
+    });
+
     // Cập nhật dropdown addCharacter
     const addCharacterSelect = $("#addCharacter");
     addCharacterSelect.empty();
@@ -55,6 +79,9 @@ function setupUI() {
             } else {
                 console.warn(`Failed to add character ${selectedCharacter}`);
             }
+            // Bỏ focus khỏi dropdown
+            $(this).blur();
+            console.log(`Blurred addCharacter dropdown after selecting ${selectedCharacter}`);
         }
     });
 

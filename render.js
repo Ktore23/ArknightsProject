@@ -25,16 +25,19 @@ var isInRelaxState = {};
 var isPlayingRandomAnimation = {};
 var attackSequence = {};
 var isMouseHeld = false;
+var isDraggingCamera = false; // Trạng thái kéo camera
+var lastMousePosition = { x: 0, y: 0 }; // Vị trí chuột khi bắt đầu kéo
 
 var moveStates = {}; // { isMoving: boolean, moveTime: number, stopTime: number, waitForAnimationEnd: boolean }
 
 // Thêm kích thước bản đồ cố định và camera
 const WORLD_WIDTH = 2000; // Chiều rộng bản đồ thế giới
 const WORLD_HEIGHT = 1500; // Chiều cao bản đồ thế giới
+const margin = 100; // Khoảng cách tối thiểu từ ranh giới bản đồ
 var camera = {
-    x: 0, // Vị trí x của camera trong tọa độ thế giới
-    y: 0, // Vị trí y của camera trong tọa độ thế giới
-    zoom: 1 // Tỷ lệ thu phóng
+    x: margin + Math.random() * (WORLD_WIDTH - 2 * margin), // Vị trí x ngẫu nhiên
+    y: margin + Math.random() * (WORLD_HEIGHT - 2 * margin), // Vị trí y ngẫu nhiên
+    zoom: 2 // Tỷ lệ thu phóng
 };
 
 const ATTACK_TIMEOUT = 5000;
@@ -101,7 +104,7 @@ export function addCharacter(name) {
             return false;
         }
 
-        const margin = 50;
+        // const margin = 50;
         const maxAttempts = 10;
         let placed = false;
         let attempts = 0;
@@ -223,7 +226,7 @@ export function initializeSelectedCharacter() {
                 return;
             }
 
-            const margin = 50;
+            // const margin = 50;
             const maxAttempts = 10;
             let placed = false;
             let attempts = 0;
@@ -378,25 +381,55 @@ function init() {
         keys[event.code] = false;
     });
 
+    canvas.addEventListener('mousedown', function (event) {
+        if (event.button === 0) {
+            const playerName = $("#playerCharacter").val();
+            if (!skeletons[playerName]) {
+                // Chỉ cho phép kéo camera khi chưa chọn nhân vật chính
+                isDraggingCamera = true;
+                lastMousePosition.x = event.clientX;
+                lastMousePosition.y = event.clientY;
+                console.log("Started dragging camera at:", lastMousePosition);
+            } else {
+                isLeftMouseClicked = true;
+                isMouseHeld = true;
+                console.log("Mouse left clicked on canvas at position:", mousePosition);
+            }
+        }
+    });
+
     canvas.addEventListener('mousemove', function (event) {
         const rect = canvas.getBoundingClientRect();
         mousePosition.x = event.clientX - rect.left;
         mousePosition.y = event.clientY - rect.top;
-    });
 
-    canvas.addEventListener('mousedown', function (event) {
-        if (event.button === 0) {
-            isLeftMouseClicked = true;
-            isMouseHeld = true;
-            console.log("Mouse left clicked on canvas at position:", mousePosition);
+        if (isDraggingCamera) {
+            const deltaX = event.clientX - lastMousePosition.x;
+            const deltaY = event.clientY - lastMousePosition.y;
+            // Cập nhật vị trí chuột cuối
+            lastMousePosition.x = event.clientX;
+            lastMousePosition.y = event.clientY;
+            // Chuyển đổi độ lệch từ màn hình sang thế giới (ngược hướng kéo)
+            camera.x -= deltaX / camera.zoom;
+            camera.y += deltaY / camera.zoom; // Đảo ngược Y vì trục Y màn hình ngược với thế giới
+            // Giới hạn camera trong bản đồ
+            // const margin = 50;
+            camera.x = Math.max(margin, Math.min(WORLD_WIDTH - margin, camera.x));
+            camera.y = Math.max(margin, Math.min(WORLD_HEIGHT - margin, camera.y));
+            console.log(`Dragging camera to: x=${camera.x}, y=${camera.y}`);
         }
     });
 
     canvas.addEventListener('mouseup', function (event) {
         if (event.button === 0) {
-            isLeftMouseClicked = false;
-            isMouseHeld = false;
-            console.log("Mouse left released on canvas");
+            if (isDraggingCamera) {
+                isDraggingCamera = false;
+                console.log("Stopped dragging camera");
+            } else {
+                isLeftMouseClicked = false;
+                isMouseHeld = false;
+                console.log("Mouse left released on canvas");
+            }
         }
     });
 
@@ -998,6 +1031,18 @@ function render() {
     })).sort((a, b) => b.y - a.y);
 
     hitboxCtx.clearRect(0, 0, hitboxCanvas.width, hitboxCanvas.height);
+
+    // Draw map border
+    hitboxCtx.strokeStyle = "rgba(255, 255, 255, 0.8)"; // White border with slight transparency
+    hitboxCtx.lineWidth = 2;
+    const bottomLeft = worldToScreen(0, 0);
+    const topRight = worldToScreen(WORLD_WIDTH, WORLD_HEIGHT);
+    hitboxCtx.beginPath();
+    hitboxCtx.rect(
+        bottomLeft.screenX, topRight.screenY,
+        topRight.screenX - bottomLeft.screenX, bottomLeft.screenY - topRight.screenY
+    );
+    hitboxCtx.stroke();
 
     const hitboxes = [];
     attackHitboxes = []; // Xóa hitbox cũ trước khi cập nhật
